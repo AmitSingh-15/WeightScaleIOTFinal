@@ -11,6 +11,9 @@ static lv_obj_t *lbl_step;
 static lv_obj_t *lbl_weight;
 static lv_obj_t *lbl_raw;
 
+// ⭐ OPTIMIZATION: Single reusable buffer for text (saves ~64 bytes)
+static char g_wiz_buf[32];
+
 static void btn_evt(lv_event_t *e)
 {
     if(!event_cb) return;
@@ -101,13 +104,11 @@ void calibration_wizard_set_step(const char *txt)
 
 void calibration_wizard_set_live(float weight,long raw)
 {
-    static char buf[32];
-    snprintf(buf,sizeof(buf),"%.3f kg",weight);
-    lv_label_set_text(lbl_weight,buf);
+    snprintf(g_wiz_buf,sizeof(g_wiz_buf),"%.3f kg",weight);
+    lv_label_set_text(lbl_weight,g_wiz_buf);
 
-    static char rbuf[32];
-    snprintf(rbuf,sizeof(rbuf),"RAW: %ld",raw);
-    lv_label_set_text(lbl_raw,rbuf);
+    snprintf(g_wiz_buf,sizeof(g_wiz_buf),"RAW: %ld",raw);
+    lv_label_set_text(lbl_raw,g_wiz_buf);
 }
 
 #else

@@ -1,3 +1,7 @@
+#include "app_config.h"  /* Must be first for feature flags */
+
+#if ENABLE_WIFI_SERVICE
+
 #include "wifi_service.h"
 #include <WiFi.h>
 
@@ -54,7 +58,7 @@ static char req_pwd[65]  = {0};
    INIT
 =====================================================*/
 
-//#include <lvgl.h>
+//#include "libraries/lvgl/lvgl.h"
 
 //static lv_obj_t *wifi_debug_label = NULL;
 
@@ -205,3 +209,5 @@ bool wifi_service_is_critical(void)
 {
     return wifi_critical_section;
 }
+
+#endif  /* ENABLE_WIFI_SERVICE */

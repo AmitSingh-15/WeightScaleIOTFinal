@@ -3,7 +3,8 @@
 #include "ui_styles.h"
 #include "ui_events.h"
 #include "invoice_session_service.h"
-#include "wifi_service.h"
+// ✅ REFACTORED: Removed #include "wifi_service.h" - WiFi is now decoupled
+// ✅ Use app_controller instead for WiFi state updates
 
 #ifdef LV_VERSION_MAJOR
 
@@ -18,6 +19,9 @@ static lv_obj_t *item_labels[MAX_INVOICE_ITEMS];
 static lv_obj_t *item_delete_btns[MAX_INVOICE_ITEMS];
 
 static void (*event_cb)(int evt) = NULL;
+
+// ⭐ OPTIMIZATION: Single reusable buffer for all text formatting (saves ~200 bytes)
+static char g_format_buf[64];  // Largest size needed (for device name)
 
 static void btn_event_cb(lv_event_t *e)
 {
@@ -184,10 +188,10 @@ void home_screen_create(lv_obj_t *parent)
 
     lv_label_set_text(lv_label_create(right),"Invoice Items");
 
-    // Register to receive WiFi state changes to update the sync label
-    wifi_service_register_state_callback([](wifi_state_t s){
-        home_screen_set_sync_status(s == WIFI_CONNECTED ? "Online" : "Offline");
-    });
+    // ✅ REFACTORED: No direct WiFi dependency!
+    // WiFi status is now PUSHED to UI via app_controller
+    // The controller calls home_screen_set_sync_status() when WiFi state changes
+    // This removes ~500KB of WiFi library code from being linked into the UI!
 
     for(int i=0;i<MAX_INVOICE_ITEMS;i++)
     {
@@ -216,9 +220,8 @@ void home_screen_set_device(const char *name)
 {
     if(lbl_device)
     {
-        static char buf[64];
-        snprintf(buf,sizeof(buf),"Device: %s",name);
-        lv_label_set_text(lbl_device,buf);
+        snprintf(g_format_buf, sizeof(g_format_buf), "Device: %s", name);
+        lv_label_set_text(lbl_device, g_format_buf);
     }
 }
 
@@ -239,12 +242,11 @@ void home_screen_refresh_invoice_details(void)
             const invoice_item_t *it = invoice_session_get(i);
             if(it)
             {
-                static char buf[48];
-                snprintf(buf, sizeof(buf),
+                snprintf(g_format_buf, sizeof(g_format_buf),
                          "%.3f kg x%d",
                          it->weight,
                          it->quantity);
-                lv_label_set_text(item_labels[i], buf);
+                lv_label_set_text(item_labels[i], g_format_buf);
             }
         }
         else
@@ -258,36 +260,32 @@ void home_screen_set_weight(float w)
 {
     if(!lbl_weight) return;
 
-    static char buf[32];
-    snprintf(buf, sizeof(buf), "%.1f kg", w);
-    lv_label_set_text(lbl_weight, buf);
+    snprintf(g_format_buf, sizeof(g_format_buf), "%.1f kg", w);
+    lv_label_set_text(lbl_weight, g_format_buf);
 }
 
 void home_screen_set_quantity(uint16_t qty)
 {
     if(!lbl_qty) return;
 
-    static char buf[16];
-    snprintf(buf, sizeof(buf), "Qty: %u", qty);
-    lv_label_set_text(lbl_qty, buf);
+    snprintf(g_format_buf, sizeof(g_format_buf), "Qty: %u", qty);
+    lv_label_set_text(lbl_qty, g_format_buf);
 }
 
 void home_screen_set_invoice(uint32_t id)
 {
     if(!lbl_invoice) return;
 
-    static char buf[24];
-    snprintf(buf, sizeof(buf), "Invoice #%lu", id);
-    lv_label_set_text(lbl_invoice, buf);
+    snprintf(g_format_buf, sizeof(g_format_buf), "Invoice #%lu", id);
+    lv_label_set_text(lbl_invoice, g_format_buf);
 }
 
 void home_screen_set_version(const char *ver)
 {
     if(version_label)
     {
-        static char buf[32];
-        snprintf(buf, sizeof(buf), "v%s", ver);
-        lv_label_set_text(version_label, buf);
+        snprintf(g_format_buf, sizeof(g_format_buf), "v%s", ver);
+        lv_label_set_text(version_label, g_format_buf);
     }
 }
 

@@ -8,6 +8,9 @@
 
 static char saved_password[65] = {0};
 
+// ⭐ OPTIMIZATION: Single reusable buffer for text (saves ~64 bytes)
+static char g_wpop_buf[64];
+
 struct wifi_popup_t {
     lv_obj_t *scr;
     lv_obj_t *ta;
@@ -161,10 +164,9 @@ void wifi_password_popup_show(const char *ssid)
     lv_obj_add_style(wp->scr, &g_styles.screen, 0);
 
     lv_obj_t *title = lv_label_create(wp->scr);
-    static char buf[64];
-    snprintf(buf, sizeof(buf),
+    snprintf(g_wpop_buf, sizeof(g_wpop_buf),
              "Password for %s", wp->ssid);
-    lv_label_set_text(title, buf);
+    lv_label_set_text(title, g_wpop_buf);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
 
     wp->ta = lv_textarea_create(wp->scr);

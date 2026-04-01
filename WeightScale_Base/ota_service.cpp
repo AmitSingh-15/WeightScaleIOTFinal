@@ -1,3 +1,7 @@
+#include "app_config.h"  /* Must be first for feature flags */
+
+#if ENABLE_OTA_UPDATES
+
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPUpdate.h>
@@ -183,3 +187,5 @@ void ota_service_check_and_update(void)
             break;
     }
 }
+
+#endif  /* ENABLE_OTA_UPDATES */

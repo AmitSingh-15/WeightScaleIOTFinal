@@ -1,6 +1,9 @@
 #include <lvgl.h>
 #include "calibration_screen.h"
+#include "app_config.h"
+#if ENABLE_HX711_SCALE
 #include "scale_service_v2.h"
+#endif
 #include "ui_styles.h"
 #include <stdio.h>
 
@@ -14,6 +17,9 @@ static lv_obj_t *lbl_raw;
 
 
 static lv_obj_t *lbl_profile;
+
+// ⭐ OPTIMIZATION: Single reusable buffer for display text (saves ~128 bytes)
+static char g_cal_buf[64];
 
 static void btn_evt(lv_event_t *e)
 {
@@ -34,13 +40,13 @@ void calibration_screen_register_callback(void (*cb)(int evt))
 void calibration_screen_create(lv_obj_t *parent)
 {
     lv_obj_add_style(parent,&g_styles.screen,0);
-    lv_obj_set_size(parent,800,480);
+    lv_obj_set_size(parent, screenWidth, screenHeight);
 
     /* ===== HEADER ===== */
 
     lv_obj_t *header = lv_obj_create(parent);
     lv_obj_add_style(header,&g_styles.card,0);
-    lv_obj_set_size(header,800,80);
+    lv_obj_set_size(header, screenWidth, 80);
     lv_obj_align(header,LV_ALIGN_TOP_MID,0,0);
 
     lv_label_set_text(lv_label_create(header),"CALIBRATION MODE");
@@ -55,7 +61,7 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lv_obj_t *live = lv_obj_create(parent);
     lv_obj_add_style(live,&g_styles.card,0);
-    lv_obj_set_size(live,780,150);
+    lv_obj_set_size(live, screenWidth - 40, 150);
     lv_obj_align(live,LV_ALIGN_TOP_MID,0,90);
 
     lbl_profile = lv_label_create(live);
@@ -75,7 +81,7 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lv_obj_t *profile = lv_obj_create(parent);
     lv_obj_add_style(profile,&g_styles.card,0);
-    lv_obj_set_size(profile,780,80);
+    lv_obj_set_size(profile, screenWidth - 40, 80);
     lv_obj_align(profile,LV_ALIGN_TOP_MID,0,250);
     lv_obj_set_flex_flow(profile,LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_gap(profile,10,0);
@@ -102,7 +108,7 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lv_obj_t *actions = lv_obj_create(parent);
     lv_obj_add_style(actions,&g_styles.card,0);
-    lv_obj_set_size(actions,780,100);
+    lv_obj_set_size(actions, screenWidth - 40, 100);
     lv_obj_align(actions,LV_ALIGN_BOTTOM_MID,0,-10);
     lv_obj_set_flex_flow(actions,LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_gap(actions,20,0);
@@ -138,28 +144,25 @@ void calibration_screen_set_live(float weight,float raw)
     if(!lbl_weight  || !lv_obj_is_valid(lbl_weight))  return;
     if(!lbl_raw     || !lv_obj_is_valid(lbl_raw))     return;
 
+#if ENABLE_HX711_SCALE
     const scale_profile_t *p = scale_service_get_profile();
     if(!p) return;
 
-    static char pbuf[64];
-    snprintf(pbuf,sizeof(pbuf),
+    snprintf(g_cal_buf, sizeof(g_cal_buf),
              "Profile: %s | Scale: %.1f",
              p->name,
              p->scale);
-    lv_label_set_text(lbl_profile,pbuf);
+    lv_label_set_text(lbl_profile, g_cal_buf);
+#endif
 
-    static char wbuf[32];
-    //snprintf(wbuf,sizeof(wbuf),"%.3f kg",weight);
     int value = (int)(weight * 100);
-    lv_snprintf(wbuf, sizeof(wbuf), "%d.%03d kg", value / 100, abs(value % 100));
+    lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%03d kg", value / 100, abs(value % 100));
     
-    lv_label_set_text(lbl_weight,wbuf);
+    lv_label_set_text(lbl_weight, g_cal_buf);
 
-    static char rbuf[32];
-    //snprintf(rbuf,sizeof(rbuf),"RAW: %ld",raw);
     int value1 = (int)(raw * 100);
-    lv_snprintf(rbuf, sizeof(rbuf), "%d.%03d", value1 / 100, abs(value1 % 100));
-    lv_label_set_text(lbl_raw,rbuf);
+    lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%03d", value1 / 100, abs(value1 % 100));
+    lv_label_set_text(lbl_raw, g_cal_buf);
 }
 
 #else

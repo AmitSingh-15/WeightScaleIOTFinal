@@ -1,5 +1,10 @@
 #pragma once
 #include <cstdint>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifdef LV_VERSION_MAJOR
 #include <lvgl.h>
 #include "invoice_session_service.h"
@@ -27,4 +32,8 @@ void home_screen_set_device(const char *name);
 void home_screen_set_sync_status(const char *txt);
 void home_screen_refresh_invoice_details(void);
 void home_screen_set_version(const char *ver);
+#endif
+
+#ifdef __cplusplus
+}
 #endif

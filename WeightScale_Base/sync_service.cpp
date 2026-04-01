@@ -1,3 +1,7 @@
+#include "app_config.h"  /* Must be first for feature flags */
+
+#if ENABLE_CLOUD_SYNC
+
 #include "sync_service.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -207,3 +211,4 @@ void sync_service_loop(void)
         devlog_printf("[SYNC] Upload failed - server rejected");
     }
 }
+#endif  /* ENABLE_CLOUD_SYNC */

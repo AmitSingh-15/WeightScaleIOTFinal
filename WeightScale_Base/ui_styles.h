@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cstdint>
-
-#ifdef LV_VERSION_MAJOR
 #include <lvgl.h>
 
 typedef struct {
@@ -15,14 +13,6 @@ typedef struct {
     lv_style_t btn_secondary;
     lv_style_t btn_danger;
 } ui_styles_t;
-
-#else
-
-typedef struct {
-    uint8_t _dummy;
-} ui_styles_t;
-
-#endif
 
 #ifdef __cplusplus
 extern "C" {

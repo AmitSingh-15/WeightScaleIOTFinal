@@ -18,10 +18,16 @@
 #define SCALE_DEFAULT_HOLD_THRESHOLD 0.12f
 #define SCALE_DEFAULT_HOLD_DURATION_MS 600
 
-// LVGL buffer config
-#define LVGL_BUFFER_LINES 96
+// LVGL buffer config - AGGRESSIVE: 2 lines only (~8KB for 2 buffers)
+#define LVGL_BUFFER_LINES 2
 
-// Task settings
+// Feature flags - all enabled for full functionality
+#define ENABLE_WIFI_SERVICE 1
+#define ENABLE_OTA_UPDATES 1
+#define ENABLE_CLOUD_SYNC 1
+#define ENABLE_TOUCH_INPUT 1
+#define ENABLE_HX711_SCALE 1
+#define ENABLE_CALIBRATION 1
 #define SCALE_TASK_STACK_SIZE 12288
 #define SCALE_TASK_PRIORITY   1
 #define SCALE_TASK_CORE       1

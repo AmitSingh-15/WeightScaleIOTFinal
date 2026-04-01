@@ -1,7 +1,14 @@
 #include "ui/ui_calibration.h"
 #include "ui_styles.h"
+#include "ui_events.h"
+#include "calibration_screen.h"
 #include "services/scale_service.h"
 #include "services/calibration_service.h"
+
+/* LVGL v8 flex align: use START instead of STRETCH */
+#ifndef LV_FLEX_ALIGN_STRETCH
+#define LV_FLEX_ALIGN_STRETCH LV_FLEX_ALIGN_START
+#endif
 
 static lv_obj_t *cal_screen = NULL;
 static lv_obj_t *lbl_profile = NULL;

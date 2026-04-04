@@ -208,6 +208,8 @@ void wifi_password_popup_show(const char *ssid)
     lv_obj_set_height(wp->kb, 340);
     lv_obj_set_style_text_font(wp->kb, &lv_font_montserrat_20, 0);
     lv_obj_align(wp->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_style(wp->kb, &g_styles.kb_bg, LV_PART_MAIN);
+    lv_obj_add_style(wp->kb, &g_styles.kb_btn, LV_PART_ITEMS);
 
     lv_obj_add_event_cb(
         wp->kb,

@@ -50,8 +50,8 @@
 #include <lvgl.h>
 #include <lvgl_v8_port.h>
 
-// HX711 for weight reading
-#include <HX711.h>
+// HX711 handled by scale_service_v2 (FreeRTOS task)
+// No direct HX711 include needed here
 
 // Application UI and services (conditional on feature flags)
 #include "ui_styles.h"
@@ -91,26 +91,19 @@ using namespace esp_panel::board;
 // Board and display management
 static Board *g_board = nullptr;
 
-// HX711 weight sensor
-static HX711 scale;
-
 // LVGL UI object for weight display
 static lv_obj_t *g_weight_label = nullptr;
 
 // Weight reading state
 static float g_current_weight_kg = 0.0f;
-static uint32_t g_last_weight_read_ms = 0;
-static const uint32_t WEIGHT_READ_INTERVAL_MS = 1000;  // Read every 1 second
 
 /* ============================================================================
    FUNCTION DECLARATIONS
    ============================================================================ */
 
-static void hx711_init();
 static void ui_event_callback(int event_id);
 static void handle_weight_update(float weight_kg);
 static void handle_sync_status(const char *status);
-static void weight_read_and_update();
 
 /* ============================================================================
    SETUP FUNCTION (Arduino Entry Point)
@@ -214,8 +207,9 @@ void setup() {
        STEP 4: HX711 Weight Sensor Initialization
        ────────────────────────────────────────────────────────────────────── */
     MAIN_INFO("Step 4: Initializing HX711 Weight Sensor...");
-    hx711_init();
-    MAIN_INFO("  ✓ HX711 initialized\n");
+    // HX711 is initialized by scale_service_v2 in its FreeRTOS task
+    // No duplicate init here — avoids GPIO 27/28 contention
+    MAIN_INFO("  ✓ HX711 will init via scale_service task\n");
 
     /* ──────────────────────────────────────────────────────────────────────
        STEP 5: LVGL UI Creation
@@ -257,7 +251,7 @@ void setup() {
     
     MAIN_INFO("Display: ESP32_Display_Panel (EK79007 LCD + GT911 Touch)");
     MAIN_INFO("Graphics: LVGL 8 (vendor port with rendering task)");
-    MAIN_INFO("Sensor: HX711 Load Cell (GPIO 43/44)");
+    MAIN_INFO("Sensor: HX711 Load Cell (GPIO %d/%d)", HX711_DOUT_PIN, HX711_SCK_PIN);
     MAIN_INFO("Status: Weight reading updates every 1 second\n");
 }
 
@@ -285,68 +279,7 @@ void loop() {
    HX711 WEIGHT SENSOR FUNCTIONS
    ============================================================================ */
 
-/**
- * @brief Initialize HX711 weight sensor
- * 
- * Configures pins and calibration.
- * No I2C involved - uses only GPIO.
- */
-static void hx711_init() {
-    // Initialize HX711 with DOUT and SCK pins
-    scale.begin(HX711_DOUT_PIN, HX711_SCK_PIN);
-    
-    // Wait for sensor to be ready
-    if (!scale.wait_ready_timeout(1000)) {
-        MAIN_ERROR("HX711 not responding");
-        return;
-    }
-    
-    // Power down and up to reset
-    scale.power_down();
-    delay(100);
-    scale.power_up();
-    delay(100);
-    
-    // Read a few samples to stabilize
-    for (int i = 0; i < 10; i++) {
-        scale.read();
-        delay(10);
-    }
-    
-    // Set scale factor (raw ADC units per kg)
-    // Adjust this value based on your HX711 calibration
-    // Example: 420 means 420 raw units per 1 kg
-    // IMPORTANT: Calibrate with known weights!
-    scale.set_scale(420.0f);
-    
-    // Tare (zero) the scale
-    scale.tare();
-    
-    MAIN_INFO("  └─ HX711 ready");
-}
-
-/**
- * @brief Read weight from HX711 and return value
- * 
- * Called periodically by app_controller via scale_service
- * Updates g_current_weight_kg for UI display
- */
-static void weight_read_and_update() {
-    // Check if sensor has new reading
-    if (!scale.is_ready()) {
-        return;  // Not ready, skip this read
-    }
-    
-    // Read weight (in kg)
-    float raw = scale.get_units(1);  // 1 sample
-    g_current_weight_kg = raw;
-    
-    // Log to serial
-    Serial.printf("[WEIGHT] %.2f kg\r\n", g_current_weight_kg);
-    
-    // Weight display is handled by app_controller calling handle_weight_update()
-    // which updates the UI screens
-}
+/* HX711 is fully managed by scale_service_v2 (FreeRTOS task on Core 1) */
 
 /* ============================================================================
    EVENT & CALLBACK FUNCTIONS

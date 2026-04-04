@@ -112,6 +112,7 @@ void device_name_screen_create(lv_obj_t *parent)
     lv_textarea_set_accepted_chars(ta_id, "0123456789");
     lv_textarea_set_placeholder_text(ta_id, "e.g. 1");
     lv_obj_set_style_text_font(ta_id, &lv_font_montserrat_20, 0);
+    lv_obj_add_style(ta_id, &g_styles.ta, 0);
     lv_obj_add_event_cb(ta_id, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     /* ================= DEVICE NAME FIELD ================= */
@@ -130,6 +131,7 @@ void device_name_screen_create(lv_obj_t *parent)
     lv_textarea_set_accepted_chars(ta_name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-");
     lv_textarea_set_placeholder_text(ta_name, "ACPL-BRANCH-NAME");
     lv_obj_set_style_text_font(ta_name, &lv_font_montserrat_20, 0);
+    lv_obj_add_style(ta_name, &g_styles.ta, 0);
     lv_obj_add_event_cb(ta_name, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     /* ================= SAVE BUTTON ================= */
@@ -152,6 +154,8 @@ void device_name_screen_create(lv_obj_t *parent)
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_UPPER);
     lv_keyboard_set_textarea(kb, ta_name);
+    lv_obj_add_style(kb, &g_styles.kb_bg, LV_PART_MAIN);
+    lv_obj_add_style(kb, &g_styles.kb_btn, LV_PART_ITEMS);
     lv_obj_add_event_cb(kb, kb_event, LV_EVENT_ALL, NULL);
 
     active_ta = ta_name;

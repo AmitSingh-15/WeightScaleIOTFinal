@@ -1,3 +1,9 @@
+#include <lvgl.h>
+
+#ifndef LV_VERSION_MAJOR
+#define LV_VERSION_MAJOR 8
+#endif
+
 #ifdef LV_VERSION_MAJOR
 
 #include "ui_styles.h"
@@ -16,16 +22,20 @@ void ui_styles_init(void)
     /* ===== DARK INDUSTRIAL BACKGROUND ===== */
     lv_style_init(&g_styles.screen);
     lv_style_set_bg_color(&g_styles.screen, COLOR_BG);
+    lv_style_set_bg_opa(&g_styles.screen, LV_OPA_COVER);
+    lv_style_set_text_color(&g_styles.screen, COLOR_TEXT);
     lv_style_set_pad_all(&g_styles.screen, 0);
 
     /* ===== CARD - dark panel with subtle border ===== */
     lv_style_init(&g_styles.card);
     lv_style_set_bg_color(&g_styles.card, COLOR_CARD);
+    lv_style_set_bg_opa(&g_styles.card, LV_OPA_COVER);
     lv_style_set_radius(&g_styles.card, 12);
     lv_style_set_pad_all(&g_styles.card, 12);
     lv_style_set_border_width(&g_styles.card, 1);
     lv_style_set_border_color(&g_styles.card, lv_color_hex(0x334155));
     lv_style_set_shadow_width(&g_styles.card, 0);
+    lv_style_set_text_color(&g_styles.card, COLOR_TEXT);
 
     /* ===== TITLE - clear readable text ===== */
     lv_style_init(&g_styles.title);
@@ -54,6 +64,7 @@ void ui_styles_init(void)
     lv_style_set_pad_ver(&g_styles.btn_primary, BTN_PAD_V);
     lv_style_set_text_font(&g_styles.btn_primary, BTN_FONT);
     lv_style_set_bg_color(&g_styles.btn_primary, lv_color_hex(0x1E3A5F));
+    lv_style_set_bg_opa(&g_styles.btn_primary, LV_OPA_COVER);
     lv_style_set_bg_grad_color(&g_styles.btn_primary, lv_color_hex(0x0F2744));
     lv_style_set_bg_grad_dir(&g_styles.btn_primary, LV_GRAD_DIR_VER);
     lv_style_set_text_color(&g_styles.btn_primary, COLOR_TEXT);
@@ -71,6 +82,7 @@ void ui_styles_init(void)
     lv_style_set_pad_ver(&g_styles.btn_secondary, BTN_PAD_V);
     lv_style_set_text_font(&g_styles.btn_secondary, BTN_FONT);
     lv_style_set_bg_color(&g_styles.btn_secondary, lv_color_hex(0x334155));
+    lv_style_set_bg_opa(&g_styles.btn_secondary, LV_OPA_COVER);
     lv_style_set_bg_grad_color(&g_styles.btn_secondary, lv_color_hex(0x1E293B));
     lv_style_set_bg_grad_dir(&g_styles.btn_secondary, LV_GRAD_DIR_VER);
     lv_style_set_text_color(&g_styles.btn_secondary, COLOR_TEXT);
@@ -85,6 +97,7 @@ void ui_styles_init(void)
     lv_style_set_pad_ver(&g_styles.btn_danger, BTN_PAD_V);
     lv_style_set_text_font(&g_styles.btn_danger, BTN_FONT);
     lv_style_set_bg_color(&g_styles.btn_danger, lv_color_hex(0x991B1B));
+    lv_style_set_bg_opa(&g_styles.btn_danger, LV_OPA_COVER);
     lv_style_set_bg_grad_color(&g_styles.btn_danger, lv_color_hex(0x7F1D1D));
     lv_style_set_bg_grad_dir(&g_styles.btn_danger, LV_GRAD_DIR_VER);
     lv_style_set_text_color(&g_styles.btn_danger, COLOR_TEXT);
@@ -102,6 +115,7 @@ void ui_styles_init(void)
     lv_style_set_pad_ver(&g_styles.btn_success, BTN_PAD_V);
     lv_style_set_text_font(&g_styles.btn_success, BTN_FONT);
     lv_style_set_bg_color(&g_styles.btn_success, lv_color_hex(0x166534));
+    lv_style_set_bg_opa(&g_styles.btn_success, LV_OPA_COVER);
     lv_style_set_bg_grad_color(&g_styles.btn_success, lv_color_hex(0x14532D));
     lv_style_set_bg_grad_dir(&g_styles.btn_success, LV_GRAD_DIR_VER);
     lv_style_set_text_color(&g_styles.btn_success, COLOR_TEXT);
@@ -119,6 +133,7 @@ void ui_styles_init(void)
     lv_style_set_pad_ver(&g_styles.btn_warning, BTN_PAD_V);
     lv_style_set_text_font(&g_styles.btn_warning, BTN_FONT);
     lv_style_set_bg_color(&g_styles.btn_warning, lv_color_hex(0x92400E));
+    lv_style_set_bg_opa(&g_styles.btn_warning, LV_OPA_COVER);
     lv_style_set_bg_grad_color(&g_styles.btn_warning, lv_color_hex(0x78350F));
     lv_style_set_bg_grad_dir(&g_styles.btn_warning, LV_GRAD_DIR_VER);
     lv_style_set_text_color(&g_styles.btn_warning, lv_color_hex(0xFCD34D));
@@ -136,6 +151,7 @@ void ui_styles_init(void)
     lv_style_set_pad_ver(&g_styles.btn_action, BTN_PAD_V);
     lv_style_set_text_font(&g_styles.btn_action, BTN_FONT);
     lv_style_set_bg_color(&g_styles.btn_action, lv_color_hex(0x1D4ED8));
+    lv_style_set_bg_opa(&g_styles.btn_action, LV_OPA_COVER);
     lv_style_set_bg_grad_color(&g_styles.btn_action, lv_color_hex(0x1E40AF));
     lv_style_set_bg_grad_dir(&g_styles.btn_action, LV_GRAD_DIR_VER);
     lv_style_set_text_color(&g_styles.btn_action, COLOR_TEXT);
@@ -151,6 +167,45 @@ void ui_styles_init(void)
     lv_style_set_bg_color(&g_styles.btn_pressed, lv_color_hex(0x0F172A));
     lv_style_set_transform_width(&g_styles.btn_pressed, -2);
     lv_style_set_transform_height(&g_styles.btn_pressed, -2);
+
+    /* ===== KEYBOARD BACKGROUND (LV_PART_MAIN) ===== */
+    lv_style_init(&g_styles.kb_bg);
+    lv_style_set_bg_color(&g_styles.kb_bg, lv_color_hex(0x0F172A));
+    lv_style_set_bg_opa(&g_styles.kb_bg, LV_OPA_COVER);
+    lv_style_set_border_width(&g_styles.kb_bg, 0);
+    lv_style_set_pad_all(&g_styles.kb_bg, 4);
+    lv_style_set_pad_gap(&g_styles.kb_bg, 4);
+
+    /* ===== KEYBOARD BUTTONS (LV_PART_ITEMS) ===== */
+    lv_style_init(&g_styles.kb_btn);
+    lv_style_set_bg_color(&g_styles.kb_btn, lv_color_hex(0x334155));
+    lv_style_set_bg_opa(&g_styles.kb_btn, LV_OPA_COVER);
+    lv_style_set_text_color(&g_styles.kb_btn, lv_color_hex(0xFFFFFF));
+    lv_style_set_border_color(&g_styles.kb_btn, lv_color_hex(0x475569));
+    lv_style_set_border_width(&g_styles.kb_btn, 1);
+    lv_style_set_radius(&g_styles.kb_btn, 6);
+
+    /* ===== TEXTAREA DARK ===== */
+    lv_style_init(&g_styles.ta);
+    lv_style_set_bg_color(&g_styles.ta, lv_color_hex(0x1E293B));
+    lv_style_set_bg_opa(&g_styles.ta, LV_OPA_COVER);
+    lv_style_set_text_color(&g_styles.ta, lv_color_hex(0xFFFFFF));
+    lv_style_set_border_color(&g_styles.ta, lv_color_hex(0x475569));
+    lv_style_set_border_width(&g_styles.ta, 2);
+    lv_style_set_radius(&g_styles.ta, 8);
+    lv_style_set_pad_all(&g_styles.ta, 10);
+
+    /* ===== LIST BUTTON ITEM ===== */
+    lv_style_init(&g_styles.list_btn);
+    lv_style_set_bg_color(&g_styles.list_btn, lv_color_hex(0x1E293B));
+    lv_style_set_bg_opa(&g_styles.list_btn, LV_OPA_COVER);
+    lv_style_set_text_color(&g_styles.list_btn, lv_color_hex(0xFFFFFF));
+    lv_style_set_border_color(&g_styles.list_btn, lv_color_hex(0x334155));
+    lv_style_set_border_width(&g_styles.list_btn, 1);
+    lv_style_set_border_side(&g_styles.list_btn, LV_BORDER_SIDE_BOTTOM);
+    lv_style_set_pad_ver(&g_styles.list_btn, 12);
+    lv_style_set_pad_hor(&g_styles.list_btn, 10);
+    lv_style_set_radius(&g_styles.list_btn, 0);
 }
 
 #else  // LV_VERSION_MAJOR not defined

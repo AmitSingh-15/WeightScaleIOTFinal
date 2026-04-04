@@ -3,6 +3,7 @@
 #include "ui_events.h"
 #include "devlog.h"
 #include <math.h>
+#include <esp_heap_caps.h>
 
 /* ========================================================
    SERVICE INCLUDES - Conditionally compiled based on app_config.h
@@ -96,7 +97,13 @@ void app_controller_init(void)
     devlog_printf("[CTRL] ✓ Invoice service initialized");
 
 #if ENABLE_WIFI_SERVICE
+    devlog_printf("[CTRL] Heap before WiFi: %lu free, %lu largest",
+                  (unsigned long)esp_get_free_heap_size(),
+                  (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     wifi_service_init();
+    devlog_printf("[CTRL] Heap after WiFi: %lu free, %lu largest",
+                  (unsigned long)esp_get_free_heap_size(),
+                  (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     // Register our internal WiFi callback
     wifi_service_register_state_callback([](wifi_state_t state) {
         g_wifi_connected = (state == WIFI_CONNECTED);
@@ -116,6 +123,9 @@ void app_controller_init(void)
 #endif
 
 #if ENABLE_CLOUD_SYNC
+    devlog_printf("[CTRL] Heap before Sync init: %lu free, %lu internal",
+                  (unsigned long)esp_get_free_heap_size(),
+                  (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     sync_service_init();
     devlog_printf("[CTRL] ✓ Sync service initialized");
 #endif
@@ -531,6 +541,8 @@ static void settings_password_popup_show(void)
     lv_keyboard_set_textarea(kb, ta);
     lv_obj_set_size(kb, 480, 220);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 5);
+    lv_obj_add_style(kb, &g_styles.kb_bg, LV_PART_MAIN);
+    lv_obj_add_style(kb, &g_styles.kb_btn, LV_PART_ITEMS);
 
     /* Store overlay pointer in keyboard user_data for cleanup */
     struct pwd_ctx {

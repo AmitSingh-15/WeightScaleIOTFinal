@@ -15,8 +15,8 @@
 #define ENABLE_CALIBRATION         1
 
 // HX711 pins (scale wiring)
-#define HX711_DOUT_PIN  43
-#define HX711_SCK_PIN   44
+#define HX711_DOUT_PIN  27
+#define HX711_SCK_PIN   28
 
 // GT911 touch I2C bus
 #define GT911_I2C_PORT  I2C_NUM_1

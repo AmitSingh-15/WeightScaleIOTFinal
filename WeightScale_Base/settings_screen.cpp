@@ -398,6 +398,12 @@ lv_timer_create([](lv_timer_t *t){
 
     dev_mode_sw = lv_switch_create(btn_row2);
     lv_obj_set_size(dev_mode_sw, 70, 40);
+    /* Dark switch styling */
+    lv_obj_set_style_bg_color(dev_mode_sw, lv_color_hex(0x334155), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dev_mode_sw, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(dev_mode_sw, lv_color_hex(0x2563EB), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(dev_mode_sw, LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(dev_mode_sw, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
     bool was = storage_load_dev_mode();
     if(was) lv_obj_add_state(dev_mode_sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(dev_mode_sw, dev_mode_changed, LV_EVENT_VALUE_CHANGED, NULL);
@@ -416,9 +422,10 @@ lv_timer_create([](lv_timer_t *t){
 
     /* Log textarea */
     dev_log_ta = lv_textarea_create(card);
-    lv_obj_set_size(dev_log_ta, lv_pct(95), 200);
+    lv_obj_set_size(dev_log_ta, lv_pct(95), 130);
     lv_obj_align(dev_log_ta, LV_ALIGN_BOTTOM_MID, 0, -5);
     lv_obj_set_style_bg_color(dev_log_ta, lv_color_hex(0x0C1222), 0);
+    lv_obj_set_style_bg_opa(dev_log_ta, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(dev_log_ta, lv_color_hex(0x94A3B8), 0);
     lv_obj_set_style_text_font(dev_log_ta, &lv_font_montserrat_14, 0);
     lv_obj_set_style_border_color(dev_log_ta, lv_color_hex(0x334155), 0);

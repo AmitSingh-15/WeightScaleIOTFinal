@@ -226,6 +226,7 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_size(weight_box, 610, 150);
     lv_obj_align(weight_box, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(weight_box, lv_color_hex(0x0C1222), 0);
+    lv_obj_set_style_bg_opa(weight_box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(weight_box, 12, 0);
     lv_obj_set_style_border_width(weight_box, 2, 0);
     lv_obj_set_style_border_color(weight_box, lv_color_hex(0x164E63), 0);
@@ -328,43 +329,43 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_flex_align(button_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(button_row, 20, 0);
 
-    /* SAVE button — Bright Cyan/Teal to stand out */
+    /* SAVE button — Cyan/Teal */
     lv_obj_t *add = lv_btn_create(button_row);
     lv_obj_set_size(add, 270, 80);
+    lv_obj_add_style(add, &g_styles.btn_primary, 0);
     lv_obj_add_event_cb(add, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_SAVE);
     lv_obj_add_event_cb(add, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_SAVE);
     lv_obj_set_style_bg_color(add, lv_color_hex(0x0E7490), 0);
     lv_obj_set_style_bg_grad_color(add, lv_color_hex(0x0C4A6E), 0);
     lv_obj_set_style_bg_grad_dir(add, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_radius(add, 12, 0);
-    lv_obj_set_style_border_width(add, 2, 0);
     lv_obj_set_style_border_color(add, lv_color_hex(0x22D3EE), 0);
     lv_obj_set_style_shadow_width(add, 12, 0);
     lv_obj_set_style_shadow_color(add, lv_color_hex(0x0E7490), 0);
     lv_obj_set_style_shadow_opa(add, LV_OPA_50, 0);
+    lv_obj_set_style_text_color(add, lv_color_hex(0xFFFFFF), 0);
     lv_obj_t *lbl_add = lv_label_create(add);
     lv_obj_set_style_text_font(lbl_add, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl_add, lv_color_hex(0xE0F2FE), 0);
+    lv_obj_set_style_text_color(lbl_add, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(lbl_add, LV_SYMBOL_SAVE " SAVE");
     lv_obj_center(lbl_add);
 
-    /* FINALIZE button — Vivid Green with glow */
+    /* FINALIZE button — Vivid Green */
     lv_obj_t *final_btn = lv_btn_create(button_row);
     lv_obj_set_size(final_btn, 270, 80);
+    lv_obj_add_style(final_btn, &g_styles.btn_primary, 0);
     lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESET);
     lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESET);
     lv_obj_set_style_bg_color(final_btn, lv_color_hex(0x15803D), 0);
     lv_obj_set_style_bg_grad_color(final_btn, lv_color_hex(0x166534), 0);
     lv_obj_set_style_bg_grad_dir(final_btn, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_radius(final_btn, 12, 0);
-    lv_obj_set_style_border_width(final_btn, 2, 0);
     lv_obj_set_style_border_color(final_btn, lv_color_hex(0x4ADE80), 0);
     lv_obj_set_style_shadow_width(final_btn, 14, 0);
     lv_obj_set_style_shadow_color(final_btn, lv_color_hex(0x22C55E), 0);
     lv_obj_set_style_shadow_opa(final_btn, LV_OPA_40, 0);
+    lv_obj_set_style_text_color(final_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_t *lbl_final = lv_label_create(final_btn);
     lv_obj_set_style_text_font(lbl_final, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl_final, lv_color_hex(0xDCFCE7), 0);
+    lv_obj_set_style_text_color(lbl_final, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(lbl_final, LV_SYMBOL_OK " FINALIZE");
     lv_obj_center(lbl_final);
 

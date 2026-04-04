@@ -70,10 +70,12 @@ void wifi_list_screen_create(lv_obj_t *parent)
     lv_obj_set_size(list, DISPLAY_WIDTH - 40, DISPLAY_HEIGHT - 105);
     lv_obj_align(list,LV_ALIGN_BOTTOM_MID,0,-5);
     lv_obj_set_style_bg_color(list, COLOR_CARD, 0);
+    lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(list, lv_color_hex(0x334155), 0);
     lv_obj_set_style_border_width(list, 1, 0);
     lv_obj_set_style_radius(list, 12, 0);
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(list, COLOR_TEXT, 0);
 }
 
 
@@ -221,6 +223,7 @@ void wifi_list_screen_refresh(void)
         ssid_store[i][32] = 0;
         if(ssid_store[i][0] == 0) continue;  // skip empty/hidden SSIDs
         lv_obj_t *btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, ssid_store[i]);
+        lv_obj_add_style(btn, &g_styles.list_btn, 0);
         lv_obj_add_event_cb(btn, ssid_clicked, LV_EVENT_RELEASED,
                             (void*)(uintptr_t)i);
     }

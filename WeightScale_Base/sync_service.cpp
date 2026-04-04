@@ -23,12 +23,26 @@ static const char *BULK_URL =
 static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
 
 static unsigned long last_sync_attempt = 0;
+static bool sync_busy = false;
+static unsigned long last_http_done_ms = 0;  // track when HTTPS finished for SDIO cooldown
 
 /* ========================================================= */
+
+bool sync_service_is_busy(void)
+{
+    return sync_busy;
+}
+
+unsigned long sync_service_last_http_ms(void)
+{
+    return last_http_done_ms;
+}
 
 void sync_service_init(void)
 {
     last_sync_attempt = 0;
+    sync_busy = false;
+    last_http_done_ms = 0;
 }
 
 /* =========================================================
@@ -117,6 +131,15 @@ void sync_service_loop(void)
         return;
     }
 
+    /* Don't do HTTPS while WiFi scan/connect is in progress — 
+       TLS traffic over SDIO bus corrupts scan results on ESP32-P4 */
+    if (wifi_service_is_critical())
+    {
+        devlog_printf("[SYNC] Deferred - WiFi busy (scan/connect)");
+        last_sync_attempt = millis() - SYNC_INTERVAL_MS + 5000; // retry in 5s
+        return;
+    }
+
     uint32_t pending = storage_get_pending_count();
     uint32_t rec_count = storage_get_record_count();
 
@@ -127,6 +150,7 @@ void sync_service_loop(void)
     }
 
     devlog_printf("[SYNC] Starting upload attempt");
+    sync_busy = true;   // signal WiFi service: SDIO bus is busy with HTTPS
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -139,6 +163,8 @@ void sync_service_loop(void)
     if (!http.begin(client, HEALTH_URL))
     {
         devlog_printf("[SYNC] Health begin failed");
+        sync_busy = false;
+        last_http_done_ms = millis();
         return;
     }
 
@@ -150,12 +176,18 @@ void sync_service_loop(void)
                   healthCode, healthResp.c_str());
 
     if (healthCode < 200 || healthCode >= 300)
+    {
+        sync_busy = false;
+        last_http_done_ms = millis();
         return;
+    }
 
     healthResp.trim();
     if (healthResp.indexOf("Healthy") < 0)
     {
         devlog_printf("[SYNC] Server not healthy");
+        sync_busy = false;
+        last_http_done_ms = millis();
         return;
     }
 
@@ -165,6 +197,8 @@ void sync_service_loop(void)
     if (postBody.length() == 0)
     {
         devlog_printf("[SYNC] Nothing to upload");
+        sync_busy = false;
+        last_http_done_ms = millis();
         return;
     }
 
@@ -175,6 +209,8 @@ void sync_service_loop(void)
     if (!http.begin(client, BULK_URL))
     {
         devlog_printf("[SYNC] POST begin failed");
+        sync_busy = false;
+        last_http_done_ms = millis();
         return;
     }
 
@@ -211,5 +247,9 @@ void sync_service_loop(void)
     {
         devlog_printf("[SYNC] Upload failed - server rejected");
     }
+
+    sync_busy = false;
+    last_http_done_ms = millis();
+    devlog_printf("[SYNC] HTTP done, SDIO cooldown starts");
 }
 #endif  /* ENABLE_CLOUD_SYNC */

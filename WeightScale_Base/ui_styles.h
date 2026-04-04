@@ -27,6 +27,10 @@ typedef struct {
     lv_style_t btn_warning;     /* Orange - Quantity/Multiply */
     lv_style_t btn_action;      /* Bold for ADD/FINALIZE */
     lv_style_t btn_pressed;     /* Darker variant for pressed state */
+    lv_style_t kb_bg;           /* Keyboard background */
+    lv_style_t kb_btn;          /* Keyboard button items */
+    lv_style_t ta;              /* Dark textarea */
+    lv_style_t list_btn;        /* Dark list button item */
 } ui_styles_t;
 
 #ifdef __cplusplus

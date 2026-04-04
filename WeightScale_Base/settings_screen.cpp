@@ -33,6 +33,7 @@ static lv_obj_t *settings_scr_ref = NULL;
 static lv_obj_t *wifi_list_scr = NULL;
 static lv_obj_t *ota_status_label = NULL;
 static lv_obj_t *device_name_label = NULL;
+static lv_obj_t *device_id_label = NULL;
 /* WiFi state change callback */
 static void wifi_state_cb(wifi_state_t s)
 {
@@ -171,6 +172,7 @@ void settings_screen_create(lv_obj_t *parent)
         connecting_overlay = NULL;
         ota_status_label = NULL;
         device_name_label = NULL;
+        device_id_label = NULL;
         dev_log_ta = NULL;
         dev_mode_sw = NULL;
         wifi_list_scr = NULL;
@@ -297,13 +299,28 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_align(dev_row, LV_ALIGN_TOP_LEFT, 0, 180);
     lv_obj_set_flex_flow(dev_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(dev_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(dev_row, 15, 0);
+    lv_obj_set_style_pad_gap(dev_row, 12, 0);
     lv_obj_set_style_pad_left(dev_row, 10, 0);
 
     lv_obj_t *dev_icon = lv_label_create(dev_row);
     lv_obj_set_style_text_font(dev_icon, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(dev_icon, COLOR_MUTED, 0);
-    lv_label_set_text(dev_icon, LV_SYMBOL_HOME "  Device:");
+    lv_label_set_text(dev_icon, LV_SYMBOL_HOME "  ID:");
+
+    device_id_label = lv_label_create(dev_row);
+    lv_obj_set_style_text_font(device_id_label, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(device_id_label, lv_color_hex(0x22D3EE), 0);
+    {
+        uint32_t did = storage_load_device_id();
+        char id_buf[16];
+        snprintf(id_buf, sizeof(id_buf), "%lu", did);
+        lv_label_set_text(device_id_label, id_buf);
+    }
+
+    lv_obj_t *sep_lbl = lv_label_create(dev_row);
+    lv_obj_set_style_text_font(sep_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(sep_lbl, COLOR_MUTED, 0);
+    lv_label_set_text(sep_lbl, "|  Name:");
 
     device_name_label = lv_label_create(dev_row);
     lv_obj_set_style_text_font(device_name_label, &lv_font_montserrat_28, 0);
@@ -318,31 +335,50 @@ lv_timer_create([](lv_timer_t *t){
 
     lv_obj_t *edit_btn = lv_btn_create(dev_row);
     lv_obj_add_style(edit_btn, &g_styles.btn_primary, 0);
-    lv_obj_set_size(edit_btn, 180, 60);
+    lv_obj_set_size(edit_btn, 160, 60);
     lv_obj_add_event_cb(edit_btn, [](lv_event_t *e) {
-        /* Navigate to device name screen */
+        /* Navigate to device config screen */
         lv_obj_t *dn_scr = lv_obj_create(NULL);
         device_name_screen_create(dn_scr);
-        device_name_screen_register_callback([](int evt, const char *name) {
+
+        /* Pre-fill current values */
+        {
+            char cur_name[33] = {0};
+            storage_load_device_name(cur_name, sizeof(cur_name));
+            uint32_t cur_id = storage_load_device_id();
+            device_name_screen_set_values(cur_name, cur_id);
+        }
+
+        device_name_screen_register_callback([](int evt, const char *name, uint32_t dev_id) {
             if(evt == DEVNAME_EVT_SAVE && name) {
                 storage_save_device_name(name);
-                /* Capture current screen (device name) before switching */
+                storage_save_device_id(dev_id);
+                /* Capture current screen before switching */
                 lv_obj_t *old_scr = lv_scr_act();
                 /* Return to settings */
                 if(settings_scr_ref && lv_obj_is_valid(settings_scr_ref)) {
                     lv_scr_load(settings_scr_ref);
-                    /* Update the label */
+                    /* Update labels */
                     if(device_name_label && lv_obj_is_valid(device_name_label))
                         lv_label_set_text(device_name_label, name);
+                    if(device_id_label && lv_obj_is_valid(device_id_label)) {
+                        char id_buf[16];
+                        snprintf(id_buf, sizeof(id_buf), "%lu", dev_id);
+                        lv_label_set_text(device_id_label, id_buf);
+                    }
                 }
                 if(old_scr) lv_obj_del_async(old_scr);
+
+                /* Update home screen device label */
+                extern void home_screen_set_device(const char *name);
+                home_screen_set_device(name);
             }
         });
         lv_scr_load(dn_scr);
     }, LV_EVENT_RELEASED, NULL);
     lv_obj_t *edit_lbl = lv_label_create(edit_btn);
     lv_obj_set_style_text_font(edit_lbl, &lv_font_montserrat_16, 0);
-    lv_label_set_text(edit_lbl, LV_SYMBOL_EDIT " EDIT NAME");
+    lv_label_set_text(edit_lbl, LV_SYMBOL_EDIT " EDIT");
     lv_obj_center(edit_lbl);
 
     /* --- Button row 2: Developer Mode switch | Clear Logs --- */

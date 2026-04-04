@@ -7,7 +7,7 @@
 // Enable WiFi and networking services
 #define ENABLE_WIFI_SERVICE        1
 #define ENABLE_OTA_UPDATES         0
-#define ENABLE_CLOUD_SYNC          0
+#define ENABLE_CLOUD_SYNC          1
 
 // Enable specific hardware features
 #define ENABLE_TOUCH_INPUT         1

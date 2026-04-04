@@ -120,6 +120,15 @@ void app_controller_init(void)
     devlog_printf("[CTRL] ✓ Sync service initialized");
 #endif
 
+    /* Load device name from NVS and display on home screen */
+    {
+        char dev_name[64] = {0};
+        if(storage_load_device_name(dev_name, sizeof(dev_name))) {
+            home_screen_set_device(dev_name);
+            devlog_printf("[CTRL] Device name loaded: %s", dev_name);
+        }
+    }
+
     devlog_printf("[CTRL] ✓ All services initialized");
     g_initialized = true;
 }
@@ -151,10 +160,12 @@ void app_controller_loop(void)
         }
     }
 
-    /* Stability detection: weight must hold ±0.02 kg for 800 ms */
-    if (fabs(w - g_stable_weight) < 0.02f)
+    /* Stability detection: weight must hold ±0.5 kg for 2 seconds.
+       After capture, weight must drop below 0.5 kg before next capture
+       is allowed (prevents repeated captures of the same load).       */
+    if (fabs(w - g_stable_weight) < 0.5f)
     {
-        if (!g_weight_captured && w >= 0.05f && (millis() - g_stable_start > 800))
+        if (!g_weight_captured && w >= 1.0f && (millis() - g_stable_start > 2000))
         {
             invoice_session_add_weight_entry(w);
             app_controller_notify_invoice_update();
@@ -168,7 +179,10 @@ void app_controller_loop(void)
     {
         g_stable_weight = w;
         g_stable_start  = millis();
-        g_weight_captured = false;  /* new weight movement, allow next capture */
+        /* Only allow next capture after weight drops near zero (item removed) */
+        if (g_weight_captured && w < 0.5f) {
+            g_weight_captured = false;
+        }
     }
 }
 
@@ -788,6 +802,7 @@ void app_controller_set_device_name(const char *name)
 {
     devlog_printf("[CTRL] Set device name: %s", name);
     storage_save_device_name(name);
+    home_screen_set_device(name);
     if (g_device_name_cb) {
         g_device_name_cb(name);
     }

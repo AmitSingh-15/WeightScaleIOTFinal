@@ -368,8 +368,7 @@ static void ui_event_callback(int event_id) {
  */
 static void handle_weight_update(float weight_kg) {
     g_current_weight_kg = weight_kg;
-    // UI screens will read g_current_weight_kg and display it
-    // Additional business logic can go here (thresholds, alerts, etc.)
+    home_screen_set_weight(weight_kg);
 }
 
 /**

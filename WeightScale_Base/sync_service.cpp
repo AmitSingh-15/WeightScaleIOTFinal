@@ -62,11 +62,12 @@ static String build_payload(void)
 
     char devname[64] = {0};
     storage_load_device_name(devname, sizeof(devname));
+    uint32_t devId = storage_load_device_id();
 
     String safeName = escape_json(String(devname));
 
     String s = "{";
-    s += "\"deviceId\":0,";
+    s += "\"deviceId\":" + String(devId) + ",";
     s += "\"deviceName\":\"" + safeName + "\",";
     s += "\"weightsInKg\":[";
 

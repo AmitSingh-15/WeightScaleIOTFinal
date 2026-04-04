@@ -40,6 +40,11 @@ void storage_clear_devlog(void);
 void storage_save_device_name(const char *name);
 bool storage_load_device_name(char *out, size_t max);
 
+/* ===== DEVICE ID STORAGE ===== */
+
+void storage_save_device_id(uint32_t id);
+uint32_t storage_load_device_id(void);
+
 bool storage_get_record_by_index(uint32_t index, invoice_record_t *out);
 
 /* ===== WIFI CREDENTIAL STORAGE ===== */

@@ -194,6 +194,20 @@ bool storage_load_device_name(char *out, size_t max)
     return true;
 }
 
+/* =========================================================
+   DEVICE ID STORAGE
+=========================================================*/
+
+void storage_save_device_id(uint32_t id)
+{
+    prefs.putUInt("dev_id", id);
+}
+
+uint32_t storage_load_device_id(void)
+{
+    return prefs.getUInt("dev_id", 0);
+}
+
 bool storage_get_record_by_index(uint32_t index, invoice_record_t *out)
 {
     if(!out) return false;

@@ -5,10 +5,9 @@
    ======================================================== */
 
 // Enable WiFi and networking services
-// Disable to reduce binary size and avoid linker issues
 #define ENABLE_WIFI_SERVICE        1
-#define ENABLE_OTA_UPDATES         1
-#define ENABLE_CLOUD_SYNC          1
+#define ENABLE_OTA_UPDATES         0
+#define ENABLE_CLOUD_SYNC          0
 
 // Enable specific hardware features
 #define ENABLE_TOUCH_INPUT         1
@@ -20,7 +19,7 @@
 #define DISPLAY_HEIGHT             600
 
 // Memory optimization
-#define LVGL_BUFFER_SIZE_LINES     96   // ~196KB per buffer (LV_COLOR_16BIT)
+#define LVGL_BUFFER_SIZE_LINES     10   // 10 lines x 2048 bytes = ~20KB
 #define STACK_PROTECTION_ENABLED   1
 
 /* ========================================================

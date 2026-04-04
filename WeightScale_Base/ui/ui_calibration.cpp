@@ -37,7 +37,7 @@ void ui_calibration_init(void (*event_cb)(int evt))
 
     lv_label_set_text(lv_label_create(header), "Calibration Mode");
     lv_obj_t *btn_back = lv_btn_create(header);
-    lv_obj_add_event_cb(btn_back, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_HOME);
+    lv_obj_add_event_cb(btn_back, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_HOME);
     lv_label_set_text(lv_label_create(btn_back), "Back");
 
     lbl_profile = lv_label_create(content);
@@ -57,15 +57,15 @@ void ui_calibration_init(void (*event_cb)(int evt))
     lv_obj_set_width(buttons, LV_PCT(100));
 
     lv_obj_t *btn_zero = lv_btn_create(buttons);
-    lv_obj_add_event_cb(btn_zero, button_handler, LV_EVENT_CLICKED, (void*)CAL_EVT_CAPTURE_ZERO);
+    lv_obj_add_event_cb(btn_zero, button_handler, LV_EVENT_RELEASED, (void*)CAL_EVT_CAPTURE_ZERO);
     lv_label_set_text(lv_label_create(btn_zero), "Tare");
 
     lv_obj_t *btn_load = lv_btn_create(buttons);
-    lv_obj_add_event_cb(btn_load, button_handler, LV_EVENT_CLICKED, (void*)CAL_EVT_CAPTURE_LOAD);
+    lv_obj_add_event_cb(btn_load, button_handler, LV_EVENT_RELEASED, (void*)CAL_EVT_CAPTURE_LOAD);
     lv_label_set_text(lv_label_create(btn_load), "Capture Load");
 
     lv_obj_t *btn_save = lv_btn_create(buttons);
-    lv_obj_add_event_cb(btn_save, button_handler, LV_EVENT_CLICKED, (void*)CAL_EVT_SAVE);
+    lv_obj_add_event_cb(btn_save, button_handler, LV_EVENT_RELEASED, (void*)CAL_EVT_SAVE);
     lv_label_set_text(lv_label_create(btn_save), "Save");
 
     lv_scr_load(cal_screen);

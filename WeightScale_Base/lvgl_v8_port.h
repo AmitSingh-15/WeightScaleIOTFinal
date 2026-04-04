@@ -6,6 +6,13 @@
 #pragma once
 
 #include "sdkconfig.h"
+
+/* 🔴 CRITICAL: Override tearing mode to 0 (disabled)
+ * Must be AFTER sdkconfig.h include to take precedence
+ */
+#undef CONFIG_LVGL_PORT_AVOID_TEARING_MODE
+#define CONFIG_LVGL_PORT_AVOID_TEARING_MODE 0
+
 #ifdef CONFIG_ARDUINO_RUNNING_CORE
 #include <Arduino.h>
 #endif

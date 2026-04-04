@@ -4,6 +4,8 @@
 #ifdef LV_VERSION_MAJOR
 #include <lvgl.h>
 
+extern "C" {
+
 /* Create the settings screen */
 void settings_screen_create(lv_obj_t *parent);
 
@@ -17,13 +19,19 @@ void settings_screen_register_calibration_callback(void (*cb)(void));
 /* ⭐ NEW: Show settings screen (used by WiFi popup) */
 void settings_screen_show(void);
 
+}  // extern "C"
+
 #else
 /* Forward declarations when LVGL is unavailable */
+extern "C" {
+
 void settings_screen_create(void *parent);
 void settings_screen_update_wifi_status(void);
 void settings_screen_register_back_callback(void (*cb)(void));
 void settings_screen_register_calibration_callback(void (*cb)(void));
 void settings_screen_show(void);
-#endif
+
+}  // extern "C"
 
 #endif
+#endif  // SETTINGS_SCREEN_H

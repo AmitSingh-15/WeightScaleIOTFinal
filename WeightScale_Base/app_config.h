@@ -5,9 +5,9 @@
    ======================================================== */
 
 // Enable WiFi and networking services
-#define ENABLE_WIFI_SERVICE        1
-#define ENABLE_OTA_UPDATES         1
-#define ENABLE_CLOUD_SYNC          1
+#define ENABLE_WIFI_SERVICE        1  // Enabled for WiFi scan
+#define ENABLE_OTA_UPDATES         0  // Disabled for now
+#define ENABLE_CLOUD_SYNC          0  // Disabled for now
 
 // Enable specific hardware features
 #define ENABLE_TOUCH_INPUT         1
@@ -20,8 +20,8 @@
 
 // GT911 touch I2C bus
 #define GT911_I2C_PORT  I2C_NUM_1
-#define GT911_SDA_PIN   GPIO_NUM_19
-#define GT911_SCL_PIN   GPIO_NUM_20
+#define GT911_SDA_PIN   GPIO_NUM_45
+#define GT911_SCL_PIN   GPIO_NUM_46
 #define GT911_ADDR      0x14
 
 // scale stabilize / hold configuration defaults
@@ -29,9 +29,9 @@
 #define SCALE_DEFAULT_HOLD_DURATION_MS 600
 
 // LVGL config - AGGRESSIVE buffer reduction for SRAM savings
-// 2 lines × 1024 width × 2 bytes = 4KB per buffer
-// 2 buffers × 4KB = 8KB total (minimal + efficient with PSRAM)
-#define LVGL_BUFFER_LINES 2
+// 10 lines × 1024 width × 2 bytes = 20KB per buffer
+// 1 buffer × 20KB = 20KB total (still reasonable)
+#define LVGL_BUFFER_LINES 10
 
 // Display resolution
 #define DISPLAY_WIDTH              1024

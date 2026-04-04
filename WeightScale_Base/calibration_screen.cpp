@@ -1,6 +1,13 @@
 #include <lvgl.h>
+
+// ✅ Ensure LVGL is detected
+#ifndef LV_VERSION_MAJOR
+#define LV_VERSION_MAJOR 8
+#endif
+
 #include "calibration_screen.h"
-#include "app_config.h"
+#include "config/app_config.h"
+#include "display/gfx_conf.h"
 #if ENABLE_HX711_SCALE
 #include "scale_service_v2.h"
 #endif
@@ -8,6 +15,10 @@
 #include <stdio.h>
 
 #ifdef LV_VERSION_MAJOR
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 static void (*event_cb)(int evt) = NULL;
 
@@ -46,34 +57,44 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lv_obj_t *header = lv_obj_create(parent);
     lv_obj_add_style(header,&g_styles.card,0);
-    lv_obj_set_size(header, screenWidth, 80);
+    lv_obj_set_size(header, screenWidth, 90);
     lv_obj_align(header,LV_ALIGN_TOP_MID,0,0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_label_set_text(lv_label_create(header),"CALIBRATION MODE");
+    lv_obj_t *cal_title = lv_label_create(header);
+    lv_obj_add_style(cal_title, &g_styles.title, 0);
+    lv_label_set_text(cal_title, LV_SYMBOL_SETTINGS "  CALIBRATION MODE");
+    lv_obj_align(cal_title, LV_ALIGN_LEFT_MID, 10, 0);
 
     lv_obj_t *back = lv_btn_create(header);
     lv_obj_add_style(back,&g_styles.btn_secondary,0);
+    lv_obj_set_size(back, 160, 65);
     lv_obj_align(back,LV_ALIGN_RIGHT_MID,-10,0);
-    lv_obj_add_event_cb(back,btn_evt,LV_EVENT_CLICKED,(void*)CAL_EVT_BACK);
-    lv_label_set_text(lv_label_create(back),"BACK");
+    lv_obj_add_event_cb(back,btn_evt,LV_EVENT_RELEASED,(void*)CAL_EVT_BACK);
+    lv_label_set_text(lv_label_create(back), LV_SYMBOL_LEFT " BACK");
 
     /* ===== LIVE DISPLAY ===== */
 
     lv_obj_t *live = lv_obj_create(parent);
     lv_obj_add_style(live,&g_styles.card,0);
-    lv_obj_set_size(live, screenWidth - 40, 150);
-    lv_obj_align(live,LV_ALIGN_TOP_MID,0,90);
+    lv_obj_set_size(live, screenWidth - 40, 180);
+    lv_obj_align(live,LV_ALIGN_TOP_MID,0,95);
+    lv_obj_clear_flag(live, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_profile = lv_label_create(live);
+    lv_obj_set_style_text_font(lbl_profile, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl_profile, COLOR_MUTED, 0);
     lv_label_set_text(lbl_profile,"Profile: NONE");
     lv_obj_align(lbl_profile,LV_ALIGN_TOP_LEFT,10,10);
 
     lbl_weight = lv_label_create(live);
     lv_obj_add_style(lbl_weight,&g_styles.value_big,0);
     lv_label_set_text(lbl_weight,"0.000 kg");
-    lv_obj_align(lbl_weight,LV_ALIGN_CENTER,0,-10);
+    lv_obj_align(lbl_weight,LV_ALIGN_CENTER,0,-5);
 
     lbl_raw = lv_label_create(live);
+    lv_obj_set_style_text_font(lbl_raw, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl_raw, COLOR_MUTED, 0);
     lv_label_set_text(lbl_raw,"RAW: 0.000 kg");
     lv_obj_align(lbl_raw,LV_ALIGN_BOTTOM_MID,0,-10);
 
@@ -81,10 +102,11 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lv_obj_t *profile = lv_obj_create(parent);
     lv_obj_add_style(profile,&g_styles.card,0);
-    lv_obj_set_size(profile, screenWidth - 40, 80);
-    lv_obj_align(profile,LV_ALIGN_TOP_MID,0,250);
+    lv_obj_set_size(profile, screenWidth - 40, 100);
+    lv_obj_align(profile,LV_ALIGN_TOP_MID,0,285);
     lv_obj_set_flex_flow(profile,LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_gap(profile,10,0);
+    lv_obj_set_flex_align(profile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(profile,15,0);
 
     const struct {
         const char* txt;
@@ -98,9 +120,9 @@ void calibration_screen_create(lv_obj_t *parent)
     for(int i=0;i<3;i++)
     {
         lv_obj_t *b = lv_btn_create(profile);
-        lv_obj_set_size(b,120,60);
+        lv_obj_set_size(b,220,80);
         lv_obj_add_style(b,&g_styles.btn_primary,0);
-        lv_obj_add_event_cb(b,btn_evt,LV_EVENT_CLICKED,(void*)profiles[i].evt);
+        lv_obj_add_event_cb(b,btn_evt,LV_EVENT_RELEASED,(void*)profiles[i].evt);
         lv_label_set_text(lv_label_create(b),profiles[i].txt);
     }
 
@@ -108,26 +130,28 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lv_obj_t *actions = lv_obj_create(parent);
     lv_obj_add_style(actions,&g_styles.card,0);
-    lv_obj_set_size(actions, screenWidth - 40, 100);
+    lv_obj_set_size(actions, screenWidth - 40, 120);
     lv_obj_align(actions,LV_ALIGN_BOTTOM_MID,0,-10);
     lv_obj_set_flex_flow(actions,LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(actions,20,0);
 
     const struct {
         const char* txt;
         int evt;
+        const lv_style_t *style;
     } act[] = {
-        {"CAPTURE ZERO", CAL_EVT_CAPTURE_ZERO},
-        {"CAPTURE LOAD", CAL_EVT_CAPTURE_LOAD},
-        {"SAVE", CAL_EVT_SAVE}
+        {"CAPTURE ZERO", CAL_EVT_CAPTURE_ZERO, &g_styles.btn_warning},
+        {"CAPTURE LOAD", CAL_EVT_CAPTURE_LOAD, &g_styles.btn_action},
+        {LV_SYMBOL_SAVE " SAVE", CAL_EVT_SAVE, &g_styles.btn_success}
     };
 
     for(int i=0;i<3;i++)
     {
         lv_obj_t *b = lv_btn_create(actions);
-        lv_obj_set_size(b,200,70);
-        lv_obj_add_style(b,&g_styles.btn_secondary,0);
-        lv_obj_add_event_cb(b,btn_evt,LV_EVENT_CLICKED,(void*)act[i].evt);
+        lv_obj_set_size(b,300,85);
+        lv_obj_add_style(b,(lv_style_t*)act[i].style,0);
+        lv_obj_add_event_cb(b,btn_evt,LV_EVENT_RELEASED,(void*)act[i].evt);
         lv_label_set_text(lv_label_create(b),act[i].txt);
     }
 }
@@ -164,11 +188,7 @@ void calibration_screen_set_live(float weight,float raw)
     lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%03d", value1 / 100, abs(value1 % 100));
     lv_label_set_text(lbl_raw, g_cal_buf);
 }
-
-#else
-/* Stub implementations when LVGL is unavailable */
-void calibration_screen_create(void *parent) { }
-void calibration_screen_set_live(float weight, float raw) { }
-void calibration_screen_register_callback(void (*cb)(int evt)) { }
-void calibration_screen_set_profile(const char *name) { }
+#ifdef __cplusplus
+}  // extern "C"
+#endif
 #endif  // LV_VERSION_MAJOR

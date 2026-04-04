@@ -25,7 +25,7 @@
 #define LV_USE_COLORWHEEL 0
 #define LV_USE_IMGBTN 0
 #define LV_USE_LED 0
-#define LV_USE_LIST 0
+#define LV_USE_LIST 1
 #define LV_USE_MENU 0
 #define LV_USE_METER 0
 #define LV_USE_SPINBOX 0
@@ -53,10 +53,12 @@
 
 /* Keep only necessary fonts */
 #define LV_FONT_MONTSERRAT_14 1
+#define LV_FONT_MONTSERRAT_16 1     /* List items, status text */
 #define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_28 1
-#define LV_FONT_MONTSERRAT_36 0     /* Disabled - save font ROM */
-#define LV_FONT_MONTSERRAT_40 0     /* Disabled - using 28 instead */
+#define LV_FONT_MONTSERRAT_36 1     /* Qty display */
+#define LV_FONT_MONTSERRAT_40 1     /* ENABLED - needed for weight display */
+#define LV_FONT_MONTSERRAT_48 1     /* ENABLED - giant weight readout */
 
 #define LV_USE_ANIMATION 1
 

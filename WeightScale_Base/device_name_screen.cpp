@@ -1,10 +1,21 @@
 #include <lvgl.h>
+
+// ✅ Ensure LVGL is detected
+#ifndef LV_VERSION_MAJOR
+#define LV_VERSION_MAJOR 8
+#endif
+
+#include "config/app_config.h"
 #include "device_name_screen.h"
 #include "ui_styles.h"
 #include <stdio.h>
 #include <string.h>
 
 #ifdef LV_VERSION_MAJOR
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* =====================================================
    STATIC OBJECTS
@@ -56,7 +67,7 @@ void device_name_screen_create(lv_obj_t *parent)
     ui_styles_init();
 
     lv_obj_add_style(parent, &g_styles.screen, 0);
-    lv_obj_set_size(parent, 800, 480);
+    lv_obj_set_size(parent, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
     /* ================= HEADER ================= */
 
@@ -108,7 +119,7 @@ void device_name_screen_create(lv_obj_t *parent)
     /* ================= KEYBOARD ================= */
 
     kb = lv_keyboard_create(parent);
-    lv_obj_set_size(kb, 800, 200);
+    lv_obj_set_size(kb, DISPLAY_WIDTH, 200);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_UPPER);
@@ -145,10 +156,8 @@ void device_name_screen_focus(void)
         lv_obj_add_state(ta_name, LV_STATE_FOCUSED);
 }
 
-#else
-/* Stub implementations when LVGL is unavailable */
-void device_name_screen_create(void *parent) { }
-void device_name_screen_register_callback(void (*cb)(int evt, const char *name)) { }
-void device_name_screen_set_title(const char *txt) { }
-void device_name_screen_focus(void) { }
+#ifdef __cplusplus
+}  // extern "C"
+#endif
+
 #endif  // LV_VERSION_MAJOR

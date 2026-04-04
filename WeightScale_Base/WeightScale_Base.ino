@@ -55,7 +55,6 @@
 
 // Application UI and services (conditional on feature flags)
 #include "ui_styles.h"
-#include "ui/ui_main.h"
 #include "home_screen.h"
 #include "app/app_controller.h"
 
@@ -226,11 +225,14 @@ void setup() {
     // Initialize styles (must come before screen creation)
     ui_styles_init();
     
-    // Initialize main UI screens
-    ui_main_init(ui_event_callback);
+    // Create the home screen on a fresh LVGL screen
+    lv_obj_t *home_scr = lv_obj_create(NULL);
+    home_screen_create(home_scr);
+    home_screen_register_callback(ui_event_callback);
+    lv_scr_load(home_scr);
     
-    // Create the home screen as default
-    home_screen_create(lv_scr_act());
+    Serial.println("[SETUP] Home screen created successfully");
+    Serial.flush();
     
 #if ENABLE_WIFI_SERVICE
     // Initialize application controller (handles WiFi, OTA, sync, etc.)
@@ -356,8 +358,8 @@ static void weight_read_and_update() {
  */
 static void ui_event_callback(int event_id) {
     MAIN_INFO("UI Event: %d", event_id);
-    // Event handling can be expanded based on UI event types
-    // Examples: SCREEN_HOME, SCREEN_SETTINGS, BUTTON_CALIBRATE, etc.
+    // ✅ Forward all UI events to the application controller
+    app_controller_handle_ui_event(event_id);
 }
 
 /**

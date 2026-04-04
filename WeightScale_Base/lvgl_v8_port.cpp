@@ -642,24 +642,50 @@ static lv_disp_t *display_init(LCD *lcd)
 
 static SemaphoreHandle_t touch_detected;
 
+/* 🔥 CRITICAL FIX: Timeout-based release to prevent ghost touch */
+static uint32_t last_touch_time_ms = 0;
+static const uint32_t TOUCH_RELEASE_TIMEOUT_MS = 50;  // Force release after 50ms idle
+
+#define DISPLAY_WIDTH           1024
+#define DISPLAY_HEIGHT          600
+
 static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
 {
     Touch *tp = (Touch *)indev_drv->user_data;
     TouchPoint point;
+    uint32_t now_ms = millis();
     data->state = LV_INDEV_STATE_RELEASED;
 
     /* if we are interrupt driven wait for the ISR to fire */
     if ( tp->isInterruptEnabled() && (xSemaphoreTake( touch_detected, 0 ) == pdFALSE) ) {
+        /* Even without interrupt, force release if timeout passes */
+        if ((now_ms - last_touch_time_ms) > TOUCH_RELEASE_TIMEOUT_MS) {
+            data->state = LV_INDEV_STATE_RELEASED;
+        }
         return;
     }
 
     /* Read data from touch controller */
     int read_touch_result = tp->readPoints(&point, 1, 0);
-    if (read_touch_result > 0) {
-        data->point.x = point.x;
-        data->point.y = point.y;
-        data->state = LV_INDEV_STATE_PRESSED;
+    
+    /* FIX 1: Filter invalid touch count */
+    if (read_touch_result <= 0) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
     }
+    
+    /* FIX 2: Sanity filter - reject garbage coordinates */
+    if (point.x < 0 || point.x > DISPLAY_WIDTH || 
+        point.y < 0 || point.y > DISPLAY_HEIGHT) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+
+    /* Valid touch detected */
+    data->point.x = point.x;
+    data->point.y = point.y;
+    data->state = LV_INDEV_STATE_PRESSED;
+    last_touch_time_ms = now_ms;
 }
 
 static bool onTouchInterruptCallback(void *user_data)

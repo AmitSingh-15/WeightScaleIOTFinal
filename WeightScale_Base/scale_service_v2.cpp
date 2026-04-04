@@ -1,36 +1,39 @@
 #include "scale_service_v2.h"
 #include <HX711.h>
 #include <math.h>
+#include "devlog.h"
 
 #define HX711_DOUT 43
 #define HX711_SCK  44
-//#define HX711_DOUT 19
-//#define HX711_SCK  20
 
 static HX711 scale;
 
 static scale_profile_t activeProfile =
 {
     "DEFAULT",
-    //100.0f,
-    //2280.0f,
-    //0.25f,
-    //0.02f,
-    //1200
-      1.0f,
-    //61287.5,
-      //58281.3,
-      //2131.5,
-      2174.0,
+    1.0f,
+    2174.0,
     0.35f,
     0.08f,
     500
 };
 
+/* Calibration profile (3-point linear regression result) */
+static cal_profile_t activeCal = { "NONE", 500, 1.0f, 0.0f, false };
+
 static float filtered_weight = 0;
 static bool hold_state = false;
 
 static TaskHandle_t scaleTaskHandle = NULL;
+
+/* Auto-zero state */
+static bool auto_zero_enabled = true;
+static const float AUTO_ZERO_THRESHOLD = 0.05f;   /* kg */
+static const unsigned long AUTO_ZERO_STABLE_MS = 2000; /* 2 seconds stable */
+static const unsigned long AUTO_ZERO_COOLDOWN_MS = 10000; /* 10s between zeros */
+static unsigned long auto_zero_stable_since = 0;
+static unsigned long auto_zero_last_tare = 0;
+static bool auto_zero_was_loaded = false;  /* track if weight was on scale recently */
 
 static float ema(float prev, float input, float alpha)
 {
@@ -79,6 +82,13 @@ static void scale_task(void *p)
 
                 float avg = sum / SAMPLE_COUNT;
 
+                /* ---------- Apply calibration profile if valid ---------- */
+                if(activeCal.valid) {
+                    /* weight = slope * raw_units + offset */
+                    avg = activeCal.slope * avg + activeCal.offset;
+                    if(avg < 0.001f) avg = 0.0f;
+                }
+
                 /* ---------- SPIKE REJECTION ---------- */
                 if(fabs(avg - last_valid) > activeProfile.hold_threshold)
                 {
@@ -91,6 +101,38 @@ static void scale_task(void *p)
                     last_valid,
                     activeProfile.ema_alpha
                 );
+
+                /* ---------- AUTO-ZERO ---------- */
+                if(auto_zero_enabled)
+                {
+                    float abs_wt = fabs(filtered_weight);
+                    if(abs_wt > 0.5f) {
+                        /* Something is on the scale */
+                        auto_zero_was_loaded = true;
+                        auto_zero_stable_since = 0;
+                    }
+                    else if(abs_wt < AUTO_ZERO_THRESHOLD) {
+                        /* Near zero — start/continue stability timer */
+                        unsigned long now = millis();
+                        if(auto_zero_stable_since == 0)
+                            auto_zero_stable_since = now;
+
+                        if(auto_zero_was_loaded &&
+                           (now - auto_zero_stable_since) >= AUTO_ZERO_STABLE_MS &&
+                           (now - auto_zero_last_tare) >= AUTO_ZERO_COOLDOWN_MS)
+                        {
+                            scale.tare(10);
+                            filtered_weight = 0.0f;
+                            last_valid = 0.0f;
+                            auto_zero_last_tare = now;
+                            auto_zero_was_loaded = false;
+                            auto_zero_stable_since = 0;
+                            devlog_printf("[SCALE] Auto-zero applied");
+                        }
+                    } else {
+                        auto_zero_stable_since = 0;
+                    }
+                }
             }
         }
 
@@ -160,4 +202,49 @@ void scale_service_resume(void)
 {
     if(scaleTaskHandle)
         vTaskResume(scaleTaskHandle);
+}
+
+void scale_service_enable_auto_zero(bool enable)
+{
+    auto_zero_enabled = enable;
+    if(enable) {
+        auto_zero_stable_since = 0;
+        auto_zero_was_loaded = false;
+    }
+}
+
+bool scale_service_auto_zero_active(void)
+{
+    return auto_zero_enabled;
+}
+
+long scale_service_get_raw_avg(int samples)
+{
+    if(samples < 1) samples = 1;
+    if(samples > 50) samples = 50;
+    if(!scale.is_ready()) return 0;
+
+    long total = 0;
+    int count = 0;
+    for(int i = 0; i < samples; i++) {
+        if(scale.is_ready()) {
+            total += scale.read();
+            count++;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return count > 0 ? (total / count) : 0;
+}
+
+void scale_service_set_cal_profile(const cal_profile_t *cp)
+{
+    if(!cp) return;
+    activeCal = *cp;
+    devlog_printf("[SCALE] Cal profile set: %s slope=%.6f offset=%.2f valid=%d",
+                  cp->name, cp->slope, cp->offset, cp->valid);
+}
+
+const cal_profile_t* scale_service_get_cal_profile(void)
+{
+    return &activeCal;
 }

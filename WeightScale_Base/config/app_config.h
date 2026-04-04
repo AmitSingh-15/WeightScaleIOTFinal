@@ -10,21 +10,21 @@
 
 // GT911 touch I2C bus (CrowPanel standard, adjust if platform uses different pins)
 #define GT911_I2C_PORT  I2C_NUM_1
-#define GT911_SDA_PIN   GPIO_NUM_19
-#define GT911_SCL_PIN   GPIO_NUM_20
+#define GT911_SDA_PIN   GPIO_NUM_45
+#define GT911_SCL_PIN   GPIO_NUM_46
 #define GT911_ADDR      0x14
 
 // scale stabilize / hold configuration defaults
 #define SCALE_DEFAULT_HOLD_THRESHOLD 0.12f
 #define SCALE_DEFAULT_HOLD_DURATION_MS 600
 
-// LVGL buffer config - AGGRESSIVE: 2 lines only (~8KB for 2 buffers)
-#define LVGL_BUFFER_LINES 2
+// LVGL buffer config - AGGRESSIVE: 10 lines (~20KB for 1 buffer)
+#define LVGL_BUFFER_LINES 10
 
 // Feature flags - all enabled for full functionality
 #define ENABLE_WIFI_SERVICE 1
-#define ENABLE_OTA_UPDATES 1
-#define ENABLE_CLOUD_SYNC 1
+#define ENABLE_OTA_UPDATES 0
+#define ENABLE_CLOUD_SYNC 0
 #define ENABLE_TOUCH_INPUT 1
 #define ENABLE_HX711_SCALE 1
 #define ENABLE_CALIBRATION 1

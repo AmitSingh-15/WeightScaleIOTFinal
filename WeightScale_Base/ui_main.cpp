@@ -53,11 +53,11 @@ void ui_main_init(void (*event_cb)(int evt))
     lv_label_set_text(label_sync, "Offline");
 
     lv_obj_t *btn_cal = lv_btn_create(header);
-    lv_obj_add_event_cb(btn_cal, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_CALIBRATE);
+    lv_obj_add_event_cb(btn_cal, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_CALIBRATE);
     lv_label_set_text(lv_label_create(btn_cal), "Calibrate");
 
     lv_obj_t *btn_settings = lv_btn_create(header);
-    lv_obj_add_event_cb(btn_settings, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_SETTINGS);
+    lv_obj_add_event_cb(btn_settings, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_SETTINGS);
     lv_label_set_text(lv_label_create(btn_settings), "Settings");
 
     // main weight view
@@ -80,14 +80,14 @@ void ui_main_init(void (*event_cb)(int evt))
     lv_obj_set_flex_align(qty_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *btn_minus = lv_btn_create(qty_row);
-    lv_obj_add_event_cb(btn_minus, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_QTY_DEC);
+    lv_obj_add_event_cb(btn_minus, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_DEC);
     lv_label_set_text(lv_label_create(btn_minus), "-");
 
     label_qty = lv_label_create(qty_row);
     lv_label_set_text(label_qty, "Qty: 1");
 
     lv_obj_t *btn_plus = lv_btn_create(qty_row);
-    lv_obj_add_event_cb(btn_plus, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_QTY_INC);
+    lv_obj_add_event_cb(btn_plus, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_INC);
     lv_label_set_text(lv_label_create(btn_plus), "+");
 
     // controls
@@ -98,15 +98,15 @@ void ui_main_init(void (*event_cb)(int evt))
     lv_obj_set_flex_align(controls, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *btn_save = lv_btn_create(controls);
-    lv_obj_add_event_cb(btn_save, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_SAVE);
+    lv_obj_add_event_cb(btn_save, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_SAVE);
     lv_label_set_text(lv_label_create(btn_save), "Add");
 
     lv_obj_t *btn_finalize = lv_btn_create(controls);
-    lv_obj_add_event_cb(btn_finalize, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_RESET);
+    lv_obj_add_event_cb(btn_finalize, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_RESET);
     lv_label_set_text(lv_label_create(btn_finalize), "Finalize");
 
     lv_obj_t *btn_clear = lv_btn_create(controls);
-    lv_obj_add_event_cb(btn_clear, button_handler, LV_EVENT_CLICKED, (void*)UI_EVT_RESET_ALL);
+    lv_obj_add_event_cb(btn_clear, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_RESET_ALL);
     lv_label_set_text(lv_label_create(btn_clear), "Clear");
 
     lv_scr_load(home_screen);

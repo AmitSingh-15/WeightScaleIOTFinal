@@ -1,6 +1,7 @@
 #include "storage_service.h"
 #include <Preferences.h>
 #include "time_service.h"
+#include "devlog.h"
 
 
 static Preferences prefs;
@@ -206,4 +207,73 @@ bool storage_get_record_by_index(uint32_t index, invoice_record_t *out)
     size_t read = prefs.getBytes(key, out, sizeof(invoice_record_t));
 
     return read == sizeof(invoice_record_t);
+}
+
+/* =========================================================
+   WIFI CREDENTIAL STORAGE
+=========================================================*/
+
+void storage_save_wifi_credentials(const char *ssid, const char *password)
+{
+    if(!ssid || !ssid[0]) return;
+    prefs.putString("wifi_ssid", ssid);
+    prefs.putString("wifi_pwd", password ? password : "");
+}
+
+bool storage_load_wifi_credentials(char *ssid, size_t ssid_max, char *pwd, size_t pwd_max)
+{
+    if(!ssid || !pwd) return false;
+
+    String s = prefs.getString("wifi_ssid", "");
+    if(s.length() == 0) return false;
+
+    strncpy(ssid, s.c_str(), ssid_max);
+    ssid[ssid_max - 1] = 0;
+
+    String p = prefs.getString("wifi_pwd", "");
+    strncpy(pwd, p.c_str(), pwd_max);
+    pwd[pwd_max - 1] = 0;
+
+    return true;
+}
+
+void storage_forget_wifi_credentials(void)
+{
+    prefs.remove("wifi_ssid");
+    prefs.remove("wifi_pwd");
+}
+
+/* =========================================================
+   CALIBRATION PROFILE STORAGE
+   Supports up to 4 profiles (index 0–3)
+=========================================================*/
+
+void storage_save_cal_profile(int profile_index, const cal_profile_t *cp)
+{
+    if(!cp || profile_index < 0 || profile_index > 3) return;
+
+    char key[16];
+    snprintf(key, sizeof(key), "cal_%d", profile_index);
+    prefs.putBytes(key, cp, sizeof(cal_profile_t));
+    devlog_printf("[STOR] Cal profile %d saved: %s", profile_index, cp->name);
+}
+
+bool storage_load_cal_profile(int profile_index, cal_profile_t *cp)
+{
+    if(!cp || profile_index < 0 || profile_index > 3) return false;
+
+    char key[16];
+    snprintf(key, sizeof(key), "cal_%d", profile_index);
+    size_t read = prefs.getBytes(key, cp, sizeof(cal_profile_t));
+    return (read == sizeof(cal_profile_t) && cp->valid);
+}
+
+void storage_save_active_cal_index(int index)
+{
+    prefs.putInt("cal_idx", index);
+}
+
+int storage_load_active_cal_index(void)
+{
+    return prefs.getInt("cal_idx", -1);  /* -1 = no active profile */
 }

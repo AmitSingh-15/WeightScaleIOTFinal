@@ -1,6 +1,11 @@
-#ifdef LV_VERSION_MAJOR
-
 #include <lvgl.h>
+
+// Ensure LVGL is detected (same guard as other screen files)
+#ifndef LV_VERSION_MAJOR
+#define LV_VERSION_MAJOR 8
+#endif
+
+#ifdef LV_VERSION_MAJOR
 #include "ui_styles.h"
 #include "wifi_service.h"
 #include "wifi_list_screen.h"
@@ -20,6 +25,7 @@ struct wifi_popup_t {
     lv_timer_t *result_timer;
 
     bool destroyed;
+    int  poll_count;     // how many times result has been polled
 
     char ssid[33];
 };
@@ -62,21 +68,27 @@ static void wifi_check_result(lv_timer_t *t)
         return;
     }
 
-    wp->result_timer = NULL;
-    lv_timer_del(t);
+    wp->poll_count++;
 
     if(wifi_service_state() == WIFI_CONNECTED)
     {
-        devlog_printf("[WIFI POPUP] Connected OK");
+        wp->result_timer = NULL;
+        lv_timer_del(t);
+        devlog_printf("[WIFI POPUP] Connected OK (poll %d)", wp->poll_count);
         lv_async_call(wifi_popup_destroy_async, wp);
         wifi_list_screen_show();
     }
-    else
+    else if(wifi_service_state() == WIFI_DISCONNECTED || wp->poll_count >= 30)
     {
-        devlog_printf("[WIFI POPUP] Connection failed");
+        /* wifi_service_loop() already set DISCONNECTED on failure/timeout,
+           or we've polled 15 times (30s) without success.                */
+        wp->result_timer = NULL;
+        lv_timer_del(t);
+        devlog_printf("[WIFI POPUP] Connection failed (poll %d)", wp->poll_count);
         lv_async_call(wifi_popup_destroy_async, wp);
         wifi_list_screen_show();
     }
+    /* else: still WIFI_CONNECTING — keep polling */
 }
 
 /* =======================================================
@@ -92,12 +104,18 @@ static void wifi_popup_kb_event(lv_event_t *e)
 
     if(code == LV_EVENT_READY)
     {
+        const char *ta_text = lv_textarea_get_text(wp->ta);
+        devlog_printf("[WIFI POPUP] TA text='%s' len=%d for %s",
+                      ta_text ? ta_text : "(null)",
+                      ta_text ? (int)strlen(ta_text) : -1,
+                      wp->ssid);
+
         strncpy(saved_password,
-                lv_textarea_get_text(wp->ta),
+                ta_text ? ta_text : "",
                 sizeof(saved_password));
         saved_password[sizeof(saved_password)-1] = 0;
 
-        devlog_printf("[WIFI POPUP] Password entered for %s", wp->ssid);
+        devlog_printf("[WIFI POPUP] Password entered for %s: '%s'", wp->ssid, saved_password);
 
         lv_obj_t *debug_label = lv_label_create(wp->scr);
         lv_label_set_text(debug_label, "Connecting...");
@@ -129,7 +147,7 @@ static void wifi_popup_kb_event(lv_event_t *e)
                     wp_timer->result_timer =
                         lv_timer_create(
                             wifi_check_result,
-                            8000,
+                            2000,
                             wp_timer
                         );
                 },
@@ -164,25 +182,43 @@ void wifi_password_popup_show(const char *ssid)
     lv_obj_add_style(wp->scr, &g_styles.screen, 0);
 
     lv_obj_t *title = lv_label_create(wp->scr);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x38BDF8), 0);
     snprintf(g_wpop_buf, sizeof(g_wpop_buf),
-             "Password for %s", wp->ssid);
+             LV_SYMBOL_WIFI " Password for %s", wp->ssid);
     lv_label_set_text(title, g_wpop_buf);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
 
     wp->ta = lv_textarea_create(wp->scr);
-    lv_textarea_set_password_mode(wp->ta, true);
+    lv_textarea_set_password_mode(wp->ta, false);  // DEBUG: show chars to verify input
     lv_textarea_set_one_line(wp->ta, true);
-    lv_obj_set_width(wp->ta, 520);
-    lv_obj_align(wp->ta, LV_ALIGN_TOP_MID, 0, 80);
+    lv_obj_set_size(wp->ta, 700, 60);
+    lv_obj_set_style_text_font(wp->ta, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_bg_color(wp->ta, lv_color_hex(0x1E293B), 0);
+    lv_obj_set_style_bg_opa(wp->ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(wp->ta, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_color(wp->ta, lv_color_hex(0x2563EB), 0);
+    lv_obj_set_style_border_width(wp->ta, 2, 0);
+    lv_obj_set_style_radius(wp->ta, 10, 0);
+    lv_obj_set_style_pad_all(wp->ta, 10, 0);
+    lv_obj_align(wp->ta, LV_ALIGN_TOP_MID, 0, 55);
 
     wp->kb = lv_keyboard_create(wp->scr);
     lv_keyboard_set_textarea(wp->kb, wp->ta);
+    lv_obj_set_height(wp->kb, 340);
+    lv_obj_set_style_text_font(wp->kb, &lv_font_montserrat_20, 0);
     lv_obj_align(wp->kb, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     lv_obj_add_event_cb(
         wp->kb,
         wifi_popup_kb_event,
-        LV_EVENT_ALL,
+        LV_EVENT_READY,
+        wp
+    );
+    lv_obj_add_event_cb(
+        wp->kb,
+        wifi_popup_kb_event,
+        LV_EVENT_CANCEL,
         wp
     );
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include "invoice_service.h"   // needed for invoice_record_t
+#include "scale_service_v2.h"  // needed for cal_profile_t
 
 void storage_service_init(void);
 
@@ -40,3 +41,14 @@ void storage_save_device_name(const char *name);
 bool storage_load_device_name(char *out, size_t max);
 
 bool storage_get_record_by_index(uint32_t index, invoice_record_t *out);
+
+/* ===== WIFI CREDENTIAL STORAGE ===== */
+void storage_save_wifi_credentials(const char *ssid, const char *password);
+bool storage_load_wifi_credentials(char *ssid, size_t ssid_max, char *pwd, size_t pwd_max);
+void storage_forget_wifi_credentials(void);
+
+/* ===== CALIBRATION PROFILE STORAGE ===== */
+void storage_save_cal_profile(int profile_index, const cal_profile_t *cp);
+bool storage_load_cal_profile(int profile_index, cal_profile_t *cp);
+void storage_save_active_cal_index(int index);
+int  storage_load_active_cal_index(void);

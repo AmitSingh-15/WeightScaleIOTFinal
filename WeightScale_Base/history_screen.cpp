@@ -1,10 +1,21 @@
 #include <lvgl.h>
+
+// ✅ Ensure LVGL is detected
+#ifndef LV_VERSION_MAJOR
+#define LV_VERSION_MAJOR 8
+#endif
+
+#include "config/app_config.h"
 #include "history_screen.h"
 #include "ui_styles.h"
 #include "storage_service.h"
 #include "invoice_service.h"
 
 #ifdef LV_VERSION_MAJOR
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 static lv_obj_t *list;
 static void (*back_callback)(void) = NULL;
@@ -22,26 +33,36 @@ void history_screen_register_back(void (*cb)(void))
 void history_screen_create(lv_obj_t *parent)
 {
     lv_obj_add_style(parent,&g_styles.screen,0);
-    lv_obj_set_size(parent,800,480);
+    lv_obj_set_size(parent, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
     /* HEADER */
     lv_obj_t *header = lv_obj_create(parent);
     lv_obj_add_style(header,&g_styles.card,0);
-    lv_obj_set_size(header,800,80);
+    lv_obj_set_size(header, DISPLAY_WIDTH, 90);
     lv_obj_align(header,LV_ALIGN_TOP_MID,0,0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_label_set_text(lv_label_create(header),"INVOICE HISTORY");
+    lv_obj_t *title = lv_label_create(header);
+    lv_obj_add_style(title, &g_styles.title, 0);
+    lv_label_set_text(title, LV_SYMBOL_LIST "  INVOICE HISTORY");
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, 10, 0);
 
     lv_obj_t *back = lv_btn_create(header);
     lv_obj_add_style(back,&g_styles.btn_secondary,0);
-    lv_obj_align(back,LV_ALIGN_RIGHT_MID,-15,0);
-    lv_obj_add_event_cb(back,back_event,LV_EVENT_CLICKED,NULL);
-    lv_label_set_text(lv_label_create(back),"BACK");
+    lv_obj_set_size(back, 160, 65);
+    lv_obj_align(back,LV_ALIGN_RIGHT_MID,-10,0);
+    lv_obj_add_event_cb(back,back_event,LV_EVENT_RELEASED,NULL);
+    lv_label_set_text(lv_label_create(back), LV_SYMBOL_LEFT " BACK");
 
     /* LIST */
     list = lv_list_create(parent);
-    lv_obj_set_size(list,760,360);
-    lv_obj_align(list,LV_ALIGN_BOTTOM_MID,0,-10);
+    lv_obj_set_size(list, DISPLAY_WIDTH - 40, DISPLAY_HEIGHT - 105);
+    lv_obj_align(list,LV_ALIGN_BOTTOM_MID,0,-5);
+    lv_obj_set_style_bg_color(list, COLOR_CARD, 0);
+    lv_obj_set_style_border_color(list, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_border_width(list, 1, 0);
+    lv_obj_set_style_radius(list, 12, 0);
+    lv_obj_set_style_text_font(list, &lv_font_montserrat_20, 0);
 }
 
 void history_screen_refresh(void)
@@ -77,9 +98,8 @@ void history_screen_refresh(void)
     }
 }
 
-#else
-/* Stub implementations when LVGL is unavailable */
-void history_screen_create(void *parent) { }
-void history_screen_refresh(void) { }
-void history_screen_register_back(void (*cb)(void)) { }
+#ifdef __cplusplus
+}  // extern "C"
+#endif
+
 #endif  // LV_VERSION_MAJOR

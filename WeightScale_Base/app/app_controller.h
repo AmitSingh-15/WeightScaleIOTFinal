@@ -127,6 +127,10 @@ bool app_controller_is_wifi_enabled(void);
 bool app_controller_is_ota_enabled(void);
 bool app_controller_is_sync_enabled(void);
 
+/* Test mode: generates random weight values every 2s */
+void app_controller_set_test_mode(bool on);
+bool app_controller_is_test_mode(void);
+
 #ifdef __cplusplus
 }
 #endif

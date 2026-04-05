@@ -21,6 +21,7 @@ void invoice_service_init(void);
 
 uint32_t invoice_service_current_id(void);
 void invoice_service_next(void);
+void invoice_service_reset(void);
 
 void invoice_service_daily_reset_if_needed(void);
 

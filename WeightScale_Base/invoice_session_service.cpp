@@ -95,14 +95,17 @@ const invoice_item_t* invoice_session_get(uint8_t index)
 
 void invoice_session_commit(void)
 {
+    Serial.printf("[INVOICE] Committing %d items\n", item_count);
     for (uint8_t i = 0; i < item_count; i++)
     {
-        invoice_service_save(
+        bool ok = invoice_service_save(
             items[i].weight,
             (uint16_t)items[i].qty,
             ENTRY_AUTO,
             NULL
         );
+        Serial.printf("[INVOICE] Item %d: W=%.2f Q=%d -> %s\n",
+                       i, items[i].weight, items[i].qty, ok ? "SAVED" : "FAILED");
     }
 
     invoice_session_clear();

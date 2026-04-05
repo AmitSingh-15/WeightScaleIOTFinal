@@ -56,6 +56,7 @@
 // Application UI and services (conditional on feature flags)
 #include "ui_styles.h"
 #include "home_screen.h"
+#include "invoice_service.h"
 #include "app/app_controller.h"
 
 // Namespaces: MUST come AFTER all includes
@@ -235,6 +236,9 @@ void setup() {
     // Register callbacks for app controller
     app_controller_register_weight_update_callback(handle_weight_update);
     app_controller_register_sync_status_callback(handle_sync_status);
+    
+    // Set initial invoice ID on home screen
+    home_screen_set_invoice(invoice_service_current_id());
 #else
     // Minimal mode without WiFi/services
     MAIN_INFO("  ⚠ WiFi and app controller disabled");

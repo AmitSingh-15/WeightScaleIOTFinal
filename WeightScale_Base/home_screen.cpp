@@ -31,6 +31,10 @@ static void (*event_cb)(int evt) = NULL;
 // ⭐ OPTIMIZATION: Single reusable buffer for all text formatting (saves ~200 bytes)
 static char g_format_buf[64];  // Largest size needed (for device name)
 
+/* Numeric keypad state */
+static int keypad_value = 1;
+static bool keypad_started = false;
+
 /* Null-out every static pointer so setters become no-ops
    while the home screen does not exist.                  */
 static void home_screen_cleanup(void)
@@ -44,6 +48,8 @@ static void home_screen_cleanup(void)
     for(int i = 0; i < MAX_INVOICE_ITEMS; i++)
         item_labels[i] = NULL;
     event_cb     = NULL;
+    keypad_value = 1;
+    keypad_started = false;
 }
 
 /* Called automatically when the home-screen parent is deleted */
@@ -79,6 +85,53 @@ static void btn_event_cb(lv_event_t *e)
     uintptr_t id = (uintptr_t)lv_event_get_user_data(e);
     Serial.printf("[BTN] Calling event_cb with id=%u\n", (unsigned int)id);
     event_cb((int)id);
+}
+
+static void keypad_update_qty(void)
+{
+    if(!lbl_qty || !lv_obj_is_valid(lbl_qty)) return;
+    snprintf(g_format_buf, sizeof(g_format_buf), "Qty: %d", keypad_value);
+    lv_label_set_text(lbl_qty, g_format_buf);
+    invoice_session_set_selected_qty(keypad_value);
+    if(event_cb) event_cb(UI_EVT_QTY_CHANGED);
+}
+
+static void keypad_btn_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = lv_event_get_target(e);
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_obj_add_style(btn, &g_styles.btn_pressed, 0);
+        return;
+    } else if (code == LV_EVENT_RELEASED) {
+        lv_obj_remove_style(btn, &g_styles.btn_pressed, 0);
+    }
+    if (code != LV_EVENT_RELEASED) return;
+
+    intptr_t key = (intptr_t)lv_event_get_user_data(e);
+
+    if(key >= 0 && key <= 9) {
+        /* Digit press */
+        if(!keypad_started) {
+            /* First digit: replace the default "1" entirely */
+            keypad_value = (int)key;
+            keypad_started = true;
+        } else {
+            int nv = keypad_value * 10 + (int)key;
+            if(nv <= 9999) keypad_value = nv;
+        }
+        if(keypad_value < 1) keypad_value = 1;
+    } else if(key == -1) {
+        /* Clear */
+        keypad_value = 1;
+        keypad_started = false;
+    } else if(key == -2) {
+        /* Backspace */
+        keypad_value = keypad_value / 10;
+        if(keypad_value < 1) { keypad_value = 1; keypad_started = false; }
+    }
+    keypad_update_qty();
 }
 
 void home_screen_register_callback(void (*cb)(int evt))
@@ -245,86 +298,66 @@ void home_screen_create(lv_obj_t *parent)
     lv_label_set_text(lbl_weight,"0.000");
     lv_obj_align(lbl_weight, LV_ALIGN_CENTER, 0, 12);
 
-    /* ===== QUANTITY ROW: [-]  Qty: XX  [+] ===== */
+    /* ===== QUANTITY KEYPAD ===== */
 
-    lv_obj_t *qty_row = lv_obj_create(left);
-    lv_obj_remove_style_all(qty_row);
-    lv_obj_set_size(qty_row, 610, 85);
-    lv_obj_align(qty_row, LV_ALIGN_TOP_MID, 0, 155);
-    lv_obj_set_flex_flow(qty_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(qty_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(qty_row, 20, 0);
+    lv_obj_t *keypad_box = lv_obj_create(left);
+    lv_obj_remove_style_all(keypad_box);
+    lv_obj_set_size(keypad_box, 610, 200);
+    lv_obj_align(keypad_box, LV_ALIGN_TOP_MID, 0, 160);
+    lv_obj_clear_flag(keypad_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Minus button */
-    lv_obj_t *minus = lv_btn_create(qty_row);
-    lv_obj_set_size(minus, 110, 80);
-    lv_obj_add_style(minus, &g_styles.btn_warning, 0);
-    lv_obj_add_event_cb(minus, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_QTY_DEC);
-    lv_obj_add_event_cb(minus, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_DEC);
-    lv_obj_t *minus_lbl = lv_label_create(minus);
-    lv_obj_set_style_text_font(minus_lbl, &lv_font_montserrat_36, 0);
-    lv_label_set_text(minus_lbl, LV_SYMBOL_MINUS);
-
-    /* Quantity display */
-    lbl_qty = lv_label_create(qty_row);
+    /* Qty display label */
+    lbl_qty = lv_label_create(keypad_box);
     lv_obj_add_style(lbl_qty, &g_styles.value_big, 0);
     lv_label_set_text(lbl_qty, "Qty: 1");
     lv_obj_set_style_text_align(lbl_qty, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_qty, 240);
+    lv_obj_set_width(lbl_qty, 610);
+    lv_obj_align(lbl_qty, LV_ALIGN_TOP_MID, 0, 0);
 
-    /* Plus button */
-    lv_obj_t *plus = lv_btn_create(qty_row);
-    lv_obj_set_size(plus, 110, 80);
-    lv_obj_add_style(plus, &g_styles.btn_warning, 0);
-    lv_obj_add_event_cb(plus, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_QTY_INC);
-    lv_obj_add_event_cb(plus, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_INC);
-    lv_obj_t *plus_lbl = lv_label_create(plus);
-    lv_obj_set_style_text_font(plus_lbl, &lv_font_montserrat_36, 0);
-    lv_label_set_text(plus_lbl, LV_SYMBOL_PLUS);
+    /* Helper to create a keypad button */
+    #define KPAD_BTN(parent, x, y, w, h, label_text, font, style, key_id) \
+    do { \
+        lv_obj_t *kb = lv_btn_create(parent); \
+        lv_obj_set_size(kb, w, h); \
+        lv_obj_set_pos(kb, x, y); \
+        lv_obj_add_style(kb, style, 0); \
+        lv_obj_add_event_cb(kb, keypad_btn_cb, LV_EVENT_PRESSED, (void*)(intptr_t)(key_id)); \
+        lv_obj_add_event_cb(kb, keypad_btn_cb, LV_EVENT_RELEASED, (void*)(intptr_t)(key_id)); \
+        lv_obj_t *kl = lv_label_create(kb); \
+        lv_obj_set_style_text_font(kl, font, 0); \
+        lv_label_set_text(kl, label_text); \
+        lv_obj_center(kl); \
+    } while(0)
 
-    /* ===== MULTIPLY BUTTONS: [x2] [x5] [x10] ===== */
+    /* 2-row keypad: 6 buttons per row */
+    const int kw = 90, kh = 50, gap = 8;
+    const int row1_y = 55, row2_y = 55 + kh + 24;
 
-    lv_obj_t *mul_row = lv_obj_create(left);
-    lv_obj_remove_style_all(mul_row);
-    lv_obj_set_size(mul_row, 610, 75);
-    lv_obj_align(mul_row, LV_ALIGN_TOP_MID, 0, 245);
-    lv_obj_set_flex_flow(mul_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(mul_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(mul_row, 15, 0);
+    /* Row 1: [1] [2] [3] [4] [5] [CLR] */
+    for(int d = 1; d <= 5; d++) {
+        char dl[2] = { (char)('0'+d), 0 };
+        int xp = (d - 1) * (kw + gap);
+        KPAD_BTN(keypad_box, xp, row1_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
+    }
+    KPAD_BTN(keypad_box, 5 * (kw + gap), row1_y, kw, kh, "CLR", &lv_font_montserrat_16, &g_styles.btn_danger, -1);
 
-    lv_obj_t *mul2 = lv_btn_create(mul_row);
-    lv_obj_set_size(mul2, 170, 70);
-    lv_obj_add_style(mul2, &g_styles.btn_secondary, 0);
-    lv_obj_add_event_cb(mul2, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_QTY_MUL2);
-    lv_obj_add_event_cb(mul2, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_MUL2);
-    lv_obj_t *mul2_lbl = lv_label_create(mul2);
-    lv_obj_set_style_text_font(mul2_lbl, &lv_font_montserrat_28, 0);
-    lv_label_set_text(mul2_lbl, "x2");
+    /* Row 2: [6] [7] [8] [9] [0] [⌫] */
+    for(int d = 6; d <= 9; d++) {
+        char dl[2] = { (char)('0'+d), 0 };
+        int xp = (d - 6) * (kw + gap);
+        KPAD_BTN(keypad_box, xp, row2_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
+    }
+    KPAD_BTN(keypad_box, 4 * (kw + gap), row2_y, kw, kh, "0", &lv_font_montserrat_20, &g_styles.btn_secondary, 0);
+    KPAD_BTN(keypad_box, 5 * (kw + gap), row2_y, kw, kh, LV_SYMBOL_BACKSPACE, &lv_font_montserrat_16, &g_styles.btn_warning, -2);
 
-    lv_obj_t *mul5 = lv_btn_create(mul_row);
-    lv_obj_set_size(mul5, 170, 70);
-    lv_obj_add_style(mul5, &g_styles.btn_secondary, 0);
-    lv_obj_add_event_cb(mul5, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_QTY_MUL5);
-    lv_obj_add_event_cb(mul5, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_MUL5);
-    lv_obj_t *mul5_lbl = lv_label_create(mul5);
-    lv_obj_set_style_text_font(mul5_lbl, &lv_font_montserrat_28, 0);
-    lv_label_set_text(mul5_lbl, "x5");
-
-    lv_obj_t *mul10 = lv_btn_create(mul_row);
-    lv_obj_set_size(mul10, 170, 70);
-    lv_obj_add_style(mul10, &g_styles.btn_secondary, 0);
-    lv_obj_add_event_cb(mul10, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_QTY_MUL10);
-    lv_obj_add_event_cb(mul10, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_MUL10);
-    lv_obj_t *mul10_lbl = lv_label_create(mul10);
-    lv_obj_set_style_text_font(mul10_lbl, &lv_font_montserrat_28, 0);
-    lv_label_set_text(mul10_lbl, "x10");
+    #undef KPAD_BTN
 
     /* ===== SAVE + FINALIZE ===== */
 
     lv_obj_t *button_row = lv_obj_create(left);
     lv_obj_remove_style_all(button_row);
     lv_obj_set_size(button_row, 610, 85);
-    lv_obj_align(button_row, LV_ALIGN_TOP_MID, 0, 325);
+    lv_obj_align(button_row, LV_ALIGN_TOP_MID, 0, 390);
     lv_obj_set_flex_flow(button_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(button_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(button_row, 20, 0);
@@ -460,6 +493,12 @@ void home_screen_set_weight(float w)
 
 void home_screen_set_quantity(int qty)
 {
+    /* Only reset keypad_started when value actually changes
+       (avoids resetting during round-trip from controller) */
+    if(qty != keypad_value) {
+        keypad_value = qty;
+        keypad_started = (qty > 1);
+    }
     if(!lbl_qty || !lv_obj_is_valid(lbl_qty)) return;
 
     snprintf(g_format_buf, sizeof(g_format_buf), "Qty: %d", qty);

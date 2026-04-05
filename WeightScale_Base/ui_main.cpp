@@ -79,16 +79,8 @@ void ui_main_init(void (*event_cb)(int evt))
     lv_obj_set_flex_flow(qty_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(qty_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *btn_minus = lv_btn_create(qty_row);
-    lv_obj_add_event_cb(btn_minus, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_DEC);
-    lv_label_set_text(lv_label_create(btn_minus), "-");
-
     label_qty = lv_label_create(qty_row);
     lv_label_set_text(label_qty, "Qty: 1");
-
-    lv_obj_t *btn_plus = lv_btn_create(qty_row);
-    lv_obj_add_event_cb(btn_plus, button_handler, LV_EVENT_RELEASED, (void*)UI_EVT_QTY_INC);
-    lv_label_set_text(lv_label_create(btn_plus), "+");
 
     // controls
     lv_obj_t *controls = lv_obj_create(container);

@@ -4,6 +4,7 @@
 #include "devlog.h"
 #include <math.h>
 #include <esp_heap_caps.h>
+#include <esp_random.h>
 
 /* ========================================================
    SERVICE INCLUDES - Conditionally compiled based on app_config.h
@@ -50,6 +51,11 @@ static ui_device_name_cb_t g_device_name_cb = NULL;
 static bool g_initialized = false;
 static float g_last_weight = 0.0f;
 
+/* ===== TEST MODE ===== */
+static bool g_test_mode = false;
+static unsigned long g_test_weight_ms = 0;
+static float g_test_weight_val = 0.0f;
+
 /* ===== STABILITY DETECTION STATE ===== */
 static float  g_stable_weight   = 0.0f;
 static unsigned long g_stable_start = 0;
@@ -94,7 +100,9 @@ void app_controller_init(void)
     }
 
     invoice_session_init();
-    devlog_printf("[CTRL] ✓ Invoice service initialized");
+    invoice_service_init();
+    devlog_printf("[CTRL] \u2713 Invoice service initialized (invoice #%lu)",
+                  invoice_service_current_id());
 
 #if ENABLE_WIFI_SERVICE
     devlog_printf("[CTRL] Heap before WiFi: %lu free, %lu largest",
@@ -160,7 +168,27 @@ void app_controller_loop(void)
 #endif
 
     /* ===== WEIGHT SENSOR → STABILITY → CAPTURE FLOW ===== */
-    float w = scale_service_get_weight();
+    float w;
+    if (g_test_mode) {
+        /* Cycle: 0-1s = zero (item removed), 1-6s = stable random weight */
+        unsigned long elapsed = millis() - g_test_weight_ms;
+        if (elapsed >= 6000) {
+            /* New cycle: brief zero phase then stable weight */
+            g_test_weight_ms = millis();
+            g_test_weight_val = 0.0f;
+            w = 0.0f;
+            g_last_weight = -1.0f;
+        } else if (elapsed >= 1000 && g_test_weight_val < 0.01f) {
+            /* Generate a new random weight and hold it stable */
+            g_test_weight_val = (float)(esp_random() % 49901 + 100) / 1000.0f;
+            w = g_test_weight_val;
+            g_last_weight = -1.0f;
+        } else {
+            w = (g_test_weight_val > 0.01f) ? g_test_weight_val : 0.0f;
+        }
+    } else {
+        w = scale_service_get_weight();
+    }
 
     /* Always update UI with live weight */
     if (w != g_last_weight) {
@@ -172,8 +200,9 @@ void app_controller_loop(void)
 
     /* Stability detection: weight must hold ±0.5 kg for 2 seconds.
        After capture, weight must drop below 0.5 kg before next capture
-       is allowed (prevents repeated captures of the same load).       */
-    if (fabs(w - g_stable_weight) < 0.5f)
+       is allowed (prevents repeated captures of the same load).
+       Disabled in test mode — user uses SAVE button instead.          */
+    if (!g_test_mode && fabs(w - g_stable_weight) < 0.5f)
     {
         if (!g_weight_captured && w >= 1.0f && (millis() - g_stable_start > 2000))
         {
@@ -185,7 +214,7 @@ void app_controller_loop(void)
             g_weight_captured = true;  /* prevent duplicate capture */
         }
     }
-    else
+    else if (!g_test_mode)
     {
         g_stable_weight = w;
         g_stable_start  = millis();
@@ -261,6 +290,7 @@ static void app_controller_restore_home_screen(void)
     /* Restore current state on the new home screen */
     home_screen_set_weight(g_last_weight);
     home_screen_set_quantity(invoice_session_get_selected_qty());
+    home_screen_set_invoice(invoice_service_current_id());
     home_screen_refresh_invoice_details();
 #if ENABLE_WIFI_SERVICE
     home_screen_set_sync_status(g_wifi_connected ? "Online" : "Offline");
@@ -655,10 +685,18 @@ void app_controller_handle_ui_event(int event_id)
         case UI_EVT_HISTORY:
             devlog_printf("[CTRL] → Open history");
             Serial.println("[CTRL] Creating new screen...");
+            Serial.flush();
             scale_service_suspend();
             {
                 lv_obj_t *new_scr = lv_obj_create(NULL);
+                Serial.println("[CTRL] history_screen_create...");
+                Serial.flush();
                 history_screen_create(new_scr);
+                Serial.println("[CTRL] history_screen_refresh...");
+                Serial.flush();
+                history_screen_refresh();
+                Serial.println("[CTRL] Registering back callback...");
+                Serial.flush();
                 // Register back callback to return to home
                 history_screen_register_back([]() {
                     app_controller_restore_home_screen();
@@ -670,15 +708,33 @@ void app_controller_handle_ui_event(int event_id)
             break;
 
         case UI_EVT_RESET:
-            devlog_printf("[CTRL] → Reset current invoice");
-            invoice_session_clear();
+        {
+            uint8_t cnt = invoice_session_count();
+            devlog_printf("[CTRL] → Finalize invoice #%lu (%u items)",
+                          invoice_service_current_id(), cnt);
+            if (cnt > 0) {
+                invoice_session_commit();
+                invoice_service_next();
+                devlog_printf("[CTRL] Invoice saved. Next invoice #%lu",
+                              invoice_service_current_id());
+            } else {
+                devlog_printf("[CTRL] No items to finalize");
+            }
+            /* Reset keypad qty back to 1 */
+            invoice_session_set_selected_qty(1);
+            /* Update invoice number on home screen */
+            home_screen_set_invoice(invoice_service_current_id());
             app_controller_notify_invoice_update();
             break;
+        }
 
         case UI_EVT_RESET_ALL:
             devlog_printf("[CTRL] → Reset ALL invoices");
             invoice_session_clear();
             storage_clear_all_records();
+            storage_reset_pending();
+            invoice_service_reset();
+            home_screen_set_invoice(invoice_service_current_id());
             app_controller_notify_invoice_update();
             break;
 
@@ -700,48 +756,20 @@ void app_controller_handle_ui_event(int event_id)
             break;
 
         case UI_EVT_SAVE:
-            devlog_printf("[CTRL] → Commit invoice");
-            invoice_session_commit();
+            devlog_printf("[CTRL] → Save weight item");
+            if (g_last_weight >= 0.05f) {
+                invoice_session_add_weight_entry(g_last_weight);
+                g_weight_captured = true;  /* prevent duplicate auto-capture */
+                devlog_printf("[CTRL] Added weight %.2f kg, qty %d",
+                              g_last_weight, invoice_session_get_selected_qty());
+            } else {
+                devlog_printf("[CTRL] Weight too low to save (%.3f)", g_last_weight);
+            }
             app_controller_notify_invoice_update();
             break;
 
-        case UI_EVT_QTY_INC:
-            devlog_printf("[CTRL] → Selected Qty++");
-            invoice_session_set_selected_qty(
-                invoice_session_get_selected_qty() + 1
-            );
-            app_controller_notify_invoice_update();
-            break;
-
-        case UI_EVT_QTY_DEC:
-            devlog_printf("[CTRL] → Selected Qty--");
-            invoice_session_set_selected_qty(
-                invoice_session_get_selected_qty() - 1
-            );
-            app_controller_notify_invoice_update();
-            break;
-
-        case UI_EVT_QTY_MUL2:
-            devlog_printf("[CTRL] → Selected Qty x2");
-            invoice_session_set_selected_qty(
-                invoice_session_get_selected_qty() * 2
-            );
-            app_controller_notify_invoice_update();
-            break;
-
-        case UI_EVT_QTY_MUL5:
-            devlog_printf("[CTRL] → Selected Qty x5");
-            invoice_session_set_selected_qty(
-                invoice_session_get_selected_qty() * 5
-            );
-            app_controller_notify_invoice_update();
-            break;
-
-        case UI_EVT_QTY_MUL10:
-            devlog_printf("[CTRL] → Selected Qty x10");
-            invoice_session_set_selected_qty(
-                invoice_session_get_selected_qty() * 10
-            );
+        case UI_EVT_QTY_CHANGED:
+            devlog_printf("[CTRL] → Qty set to %d", invoice_session_get_selected_qty());
             app_controller_notify_invoice_update();
             break;
 
@@ -874,4 +902,20 @@ bool app_controller_is_sync_enabled(void)
 #else
     return false;
 #endif
+}
+
+void app_controller_set_test_mode(bool on)
+{
+    g_test_mode = on;
+    if (on) {
+        g_test_weight_ms = 0; /* trigger immediate first weight */
+        devlog_printf("[CTRL] Test mode ENABLED");
+    } else {
+        devlog_printf("[CTRL] Test mode DISABLED");
+    }
+}
+
+bool app_controller_is_test_mode(void)
+{
+    return g_test_mode;
 }

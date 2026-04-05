@@ -408,6 +408,37 @@ lv_timer_create([](lv_timer_t *t){
     if(was) lv_obj_add_state(dev_mode_sw, LV_STATE_CHECKED);
     lv_obj_add_event_cb(dev_mode_sw, dev_mode_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
+    /* --- Separator --- */
+    lv_obj_t *sep2 = lv_label_create(btn_row2);
+    lv_obj_set_style_text_font(sep2, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(sep2, COLOR_MUTED, 0);
+    lv_label_set_text(sep2, "|");
+
+    /* --- Enable Test toggle --- */
+    lv_obj_t *test_lbl = lv_label_create(btn_row2);
+    lv_obj_set_style_text_font(test_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(test_lbl, COLOR_TEXT, 0);
+    lv_label_set_text(test_lbl, "Enable Test");
+
+    lv_obj_t *test_sw = lv_switch_create(btn_row2);
+    lv_obj_set_size(test_sw, 70, 40);
+    lv_obj_set_style_bg_color(test_sw, lv_color_hex(0x334155), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(test_sw, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(test_sw, lv_color_hex(0xD97706), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(test_sw, LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(test_sw, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    {
+        extern bool app_controller_is_test_mode(void);
+        if(app_controller_is_test_mode())
+            lv_obj_add_state(test_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(test_sw, [](lv_event_t *e){
+        lv_obj_t *sw = lv_event_get_target(e);
+        bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+        extern void app_controller_set_test_mode(bool on);
+        app_controller_set_test_mode(on);
+    }, LV_EVENT_VALUE_CHANGED, NULL);
+
     lv_obj_t *clear_logs_btn = lv_btn_create(btn_row2);
     lv_obj_add_style(clear_logs_btn, &g_styles.btn_danger, 0);
     lv_obj_set_size(clear_logs_btn, 220, 65);

@@ -8,6 +8,7 @@ void invoice_service_init(void)
 {
     storage_load_invoice(&current_invoice);
     invoice_service_daily_reset_if_needed();
+    Serial.printf("[INVOICE] Loaded invoice #%lu\n", current_invoice);
 }
 
 uint32_t invoice_service_current_id(void)
@@ -21,16 +22,30 @@ void invoice_service_next(void)
     storage_save_invoice(current_invoice);
 }
 
+void invoice_service_reset(void)
+{
+    current_invoice = 1;
+    storage_save_invoice(current_invoice);
+}
+
 void invoice_service_daily_reset_if_needed(void)
 {
     uint32_t last_day = storage_load_last_day();
     uint32_t today = time_service_today_epoch_day();
 
-    if (last_day != today) {
-        current_invoice = 1;
-        storage_save_invoice(current_invoice);
-        storage_save_last_day(today);
-        storage_clear_all_records();
+    /* Only reset if: new day AND no records pending sync */
+    if (last_day != today && today > 86400) {  /* today > 86400 = clock is valid (past 1970-01-02) */
+        uint32_t pending = storage_get_pending_count();
+        if (pending == 0) {
+            Serial.printf("[INVOICE] New day, no pending sync \u2014 resetting\n");
+            current_invoice = 1;
+            storage_save_invoice(current_invoice);
+            storage_save_last_day(today);
+            storage_clear_all_records();
+        } else {
+            Serial.printf("[INVOICE] New day but %lu pending \u2014 keeping data\n", pending);
+            storage_save_last_day(today);
+        }
     }
 }
 

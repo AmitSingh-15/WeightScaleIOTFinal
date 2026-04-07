@@ -28,6 +28,8 @@ uint32_t storage_get_pending_count(void);
 void storage_reset_pending(void);
 void storage_save_dev_mode(bool enabled);
 bool storage_load_dev_mode(void);
+void storage_save_light_mode(bool on);
+bool storage_load_light_mode(void);
 bool storage_update_record(uint32_t index, const invoice_record_t *rec);
 
 /* ===== DEVELOPER LOG STORAGE ===== */

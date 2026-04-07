@@ -19,12 +19,14 @@ extern "C" {
 #endif
 static lv_obj_t *lbl_weight;
 static lv_obj_t *lbl_qty;
+static lv_obj_t *lbl_total_weight;
 static lv_obj_t *lbl_invoice;
 static lv_obj_t *lbl_device;
 static lv_obj_t *lbl_sync;
 static lv_obj_t *version_label;   // ✅ ADDED
 
 static lv_obj_t *item_labels[MAX_INVOICE_ITEMS];
+static lv_obj_t *item_delete_btns[MAX_INVOICE_ITEMS];
 
 static void (*event_cb)(int evt) = NULL;
 
@@ -41,12 +43,15 @@ static void home_screen_cleanup(void)
 {
     lbl_weight   = NULL;
     lbl_qty      = NULL;
+    lbl_total_weight = NULL;
     lbl_invoice  = NULL;
     lbl_device   = NULL;
     lbl_sync     = NULL;
     version_label = NULL;
-    for(int i = 0; i < MAX_INVOICE_ITEMS; i++)
+    for(int i = 0; i < MAX_INVOICE_ITEMS; i++) {
         item_labels[i] = NULL;
+        item_delete_btns[i] = NULL;
+    }
     event_cb     = NULL;
     keypad_value = 1;
     keypad_started = false;
@@ -156,7 +161,7 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_remove_style_all(status_bar);
     lv_obj_set_size(status_bar, DISPLAY_WIDTH, 30);
     lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(status_bar, lv_color_hex(0x0C1222), 0);
+    lv_obj_set_style_bg_color(status_bar, ui_theme_surface(), 0);
     lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_left(status_bar, 15, 0);
     lv_obj_set_style_pad_right(status_bar, 15, 0);
@@ -164,19 +169,19 @@ void home_screen_create(lv_obj_t *parent)
 
     lbl_invoice = lv_label_create(status_bar);
     lv_obj_set_style_text_font(lbl_invoice, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_invoice, lv_color_hex(0x38BDF8), 0);
+    lv_obj_set_style_text_color(lbl_invoice, ui_theme_accent(), 0);
     lv_label_set_text(lbl_invoice, "Invoice #1");
     lv_obj_align(lbl_invoice, LV_ALIGN_LEFT_MID, 0, 0);
 
     lbl_device = lv_label_create(status_bar);
-    lv_obj_set_style_text_color(lbl_device, COLOR_MUTED, 0);
+    lv_obj_set_style_text_color(lbl_device, ui_theme_muted(), 0);
     lv_obj_set_style_text_font(lbl_device, &lv_font_montserrat_16, 0);
     lv_label_set_text(lbl_device, "Device: -");
     lv_obj_align(lbl_device, LV_ALIGN_CENTER, 0, 0);
 
     lbl_sync = lv_label_create(status_bar);
     lv_obj_set_style_text_font(lbl_sync, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_sync, COLOR_MUTED, 0);
+    lv_obj_set_style_text_color(lbl_sync, ui_theme_muted(), 0);
     lv_label_set_text(lbl_sync, LV_SYMBOL_WIFI " Offline");
     lv_obj_align(lbl_sync, LV_ALIGN_RIGHT_MID, 0, 0);
 
@@ -186,10 +191,10 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_remove_style_all(header);
     lv_obj_set_size(header, DISPLAY_WIDTH, 60);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 30);
-    lv_obj_set_style_bg_color(header, COLOR_CARD, 0);
+    lv_obj_set_style_bg_color(header, ui_theme_card(), 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(header, 1, 0);
-    lv_obj_set_style_border_color(header, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_border_color(header, ui_theme_border(), 0);
     lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -278,7 +283,7 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_t *weight_box = lv_obj_create(left);
     lv_obj_set_size(weight_box, 610, 150);
     lv_obj_align(weight_box, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(weight_box, lv_color_hex(0x0C1222), 0);
+    lv_obj_set_style_bg_color(weight_box, ui_theme_surface(), 0);
     lv_obj_set_style_bg_opa(weight_box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(weight_box, 12, 0);
     lv_obj_set_style_border_width(weight_box, 2, 0);
@@ -288,7 +293,7 @@ void home_screen_create(lv_obj_t *parent)
 
     lv_obj_t *kg_label = lv_label_create(weight_box);
     lv_obj_set_style_text_font(kg_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(kg_label, COLOR_MUTED, 0);
+    lv_obj_set_style_text_color(kg_label, ui_theme_muted(), 0);
     lv_label_set_text(kg_label, "WEIGHT (kg)");
     lv_obj_align(kg_label, LV_ALIGN_TOP_MID, 0, 6);
 
@@ -310,9 +315,16 @@ void home_screen_create(lv_obj_t *parent)
     lbl_qty = lv_label_create(keypad_box);
     lv_obj_add_style(lbl_qty, &g_styles.value_big, 0);
     lv_label_set_text(lbl_qty, "Qty: 1");
-    lv_obj_set_style_text_align(lbl_qty, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(lbl_qty, 610);
-    lv_obj_align(lbl_qty, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_text_align(lbl_qty, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(lbl_qty, 200);
+    lv_obj_align(lbl_qty, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lbl_total_weight = lv_label_create(keypad_box);
+    lv_obj_add_style(lbl_total_weight, &g_styles.value_big, 0);
+    lv_obj_set_style_text_align(lbl_total_weight, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_width(lbl_total_weight, 410);
+    lv_obj_align(lbl_total_weight, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_label_set_text(lbl_total_weight, "Total: 0.00 kg");
 
     /* Helper to create a keypad button */
     #define KPAD_BTN(parent, x, y, w, h, label_text, font, style, key_id) \
@@ -352,7 +364,7 @@ void home_screen_create(lv_obj_t *parent)
 
     #undef KPAD_BTN
 
-    /* ===== SAVE + FINALIZE ===== */
+    /* ===== SAVE ===== */
 
     lv_obj_t *button_row = lv_obj_create(left);
     lv_obj_remove_style_all(button_row);
@@ -362,29 +374,9 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_flex_align(button_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(button_row, 20, 0);
 
-    /* SAVE button — Cyan/Teal */
-    lv_obj_t *add = lv_btn_create(button_row);
-    lv_obj_set_size(add, 270, 80);
-    lv_obj_add_style(add, &g_styles.btn_primary, 0);
-    lv_obj_add_event_cb(add, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_SAVE);
-    lv_obj_add_event_cb(add, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_SAVE);
-    lv_obj_set_style_bg_color(add, lv_color_hex(0x0E7490), 0);
-    lv_obj_set_style_bg_grad_color(add, lv_color_hex(0x0C4A6E), 0);
-    lv_obj_set_style_bg_grad_dir(add, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_color(add, lv_color_hex(0x22D3EE), 0);
-    lv_obj_set_style_shadow_width(add, 12, 0);
-    lv_obj_set_style_shadow_color(add, lv_color_hex(0x0E7490), 0);
-    lv_obj_set_style_shadow_opa(add, LV_OPA_50, 0);
-    lv_obj_set_style_text_color(add, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_t *lbl_add = lv_label_create(add);
-    lv_obj_set_style_text_font(lbl_add, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl_add, lv_color_hex(0xFFFFFF), 0);
-    lv_label_set_text(lbl_add, LV_SYMBOL_SAVE " SAVE");
-    lv_obj_center(lbl_add);
-
-    /* FINALIZE button — Vivid Green */
+    /* SAVE button — Vivid Green */
     lv_obj_t *final_btn = lv_btn_create(button_row);
-    lv_obj_set_size(final_btn, 270, 80);
+    lv_obj_set_size(final_btn, 610, 80);
     lv_obj_add_style(final_btn, &g_styles.btn_primary, 0);
     lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESET);
     lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESET);
@@ -399,7 +391,7 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_t *lbl_final = lv_label_create(final_btn);
     lv_obj_set_style_text_font(lbl_final, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(lbl_final, lv_color_hex(0xFFFFFF), 0);
-    lv_label_set_text(lbl_final, LV_SYMBOL_OK " FINALIZE");
+    lv_label_set_text(lbl_final, LV_SYMBOL_SAVE " SAVE");
     lv_obj_center(lbl_final);
 
     /* ===== RIGHT PANEL - Invoice Items (remaining width) ===== */
@@ -411,7 +403,7 @@ void home_screen_create(lv_obj_t *parent)
 
     lv_obj_t *items_title = lv_label_create(right);
     lv_obj_set_style_text_font(items_title, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(items_title, lv_color_hex(0x38BDF8), 0);
+    lv_obj_set_style_text_color(items_title, ui_theme_accent(), 0);
     lv_label_set_text(items_title, "ITEMS");
     lv_obj_align(items_title, LV_ALIGN_TOP_MID, 0, 0);
 
@@ -420,21 +412,36 @@ void home_screen_create(lv_obj_t *parent)
         lv_obj_t *row = lv_obj_create(right);
         lv_obj_set_size(row, lv_pct(95), 48);
         lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 40 + i * 52);
-        lv_obj_set_style_bg_color(row, (i % 2 == 0) ? lv_color_hex(0x1E293B) : lv_color_hex(0x162032), 0);
+        lv_obj_set_style_bg_color(row, (i % 2 == 0) ? ui_theme_row_even() : ui_theme_row_odd(), 0);
         lv_obj_set_style_radius(row, 6, 0);
         lv_obj_set_style_border_width(row, 0, 0);
         lv_obj_set_style_pad_all(row, 4, 0);
 
         item_labels[i] = lv_label_create(row);
-        lv_obj_set_style_text_color(item_labels[i], COLOR_TEXT, 0);
+        lv_obj_set_style_text_color(item_labels[i], ui_theme_text(), 0);
         lv_obj_set_style_text_font(item_labels[i], &lv_font_montserrat_20, 0);
         lv_obj_align(item_labels[i], LV_ALIGN_LEFT_MID, 8, 0);
+        lv_obj_set_width(item_labels[i], 260);
+
+        item_delete_btns[i] = lv_btn_create(row);
+        lv_obj_set_size(item_delete_btns[i], 44, 34);
+        lv_obj_align(item_delete_btns[i], LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_obj_add_style(item_delete_btns[i], &g_styles.btn_danger, 0);
+        lv_obj_add_event_cb(item_delete_btns[i], btn_event_cb, LV_EVENT_PRESSED,
+                            (void*)(uintptr_t)(UI_EVT_REMOVE_ITEM_BASE + i));
+        lv_obj_add_event_cb(item_delete_btns[i], btn_event_cb, LV_EVENT_RELEASED,
+                            (void*)(uintptr_t)(UI_EVT_REMOVE_ITEM_BASE + i));
+        lv_obj_t *del_lbl = lv_label_create(item_delete_btns[i]);
+        lv_obj_set_style_text_font(del_lbl, &lv_font_montserrat_16, 0);
+        lv_label_set_text(del_lbl, LV_SYMBOL_TRASH);
+        lv_obj_center(del_lbl);
+        lv_obj_add_flag(item_delete_btns[i], LV_OBJ_FLAG_HIDDEN);
     }
 
     /* Version label */
     version_label = lv_label_create(parent);
     lv_obj_align(version_label, LV_ALIGN_BOTTOM_RIGHT, -10, -5);
-    lv_obj_set_style_text_color(version_label, COLOR_MUTED, 0);
+    lv_obj_set_style_text_color(version_label, ui_theme_muted(), 0);
     lv_obj_set_style_text_font(version_label, &lv_font_montserrat_14, 0);
     lv_label_set_text(version_label, "v0.0.0");
 
@@ -458,6 +465,7 @@ void home_screen_set_sync_status(const char *txt)
 void home_screen_refresh_invoice_details(void)
 {
     uint8_t count = invoice_session_count();
+    float total_weight = 0.0f;
 
     for(int i = 0; i < MAX_INVOICE_ITEMS; i++)
     {
@@ -468,18 +476,29 @@ void home_screen_refresh_invoice_details(void)
             const invoice_item_t *it = invoice_session_get(i);
             if(it)
             {
+                total_weight += (it->weight * (float)it->qty);
                 snprintf(g_format_buf, sizeof(g_format_buf),
-                         "%d.  %.2f kg  x  %d",
+                         "%d. %.2f kg x %d = %.2f kg",
                          i + 1,
                          it->weight,
-                         it->qty);
+                         it->qty,
+                         it->weight * (float)it->qty);
                 lv_label_set_text(item_labels[i], g_format_buf);
+                if(item_delete_btns[i] && lv_obj_is_valid(item_delete_btns[i]))
+                    lv_obj_clear_flag(item_delete_btns[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
         else
         {
             lv_label_set_text(item_labels[i], "");
+            if(item_delete_btns[i] && lv_obj_is_valid(item_delete_btns[i]))
+                lv_obj_add_flag(item_delete_btns[i], LV_OBJ_FLAG_HIDDEN);
         }
+    }
+
+    if(lbl_total_weight && lv_obj_is_valid(lbl_total_weight)) {
+        snprintf(g_format_buf, sizeof(g_format_buf), "Total: %.2f kg", total_weight);
+        lv_label_set_text(lbl_total_weight, g_format_buf);
     }
 }
 

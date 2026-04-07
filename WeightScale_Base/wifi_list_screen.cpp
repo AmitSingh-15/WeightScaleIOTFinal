@@ -22,6 +22,9 @@ static lv_obj_t *list;
 static lv_timer_t *scan_poll_timer = NULL;
 static void (*back_cb)(void) = NULL;
 static void (*select_cb)(const char*) = NULL;
+static char saved_ssid_store[33];
+static char saved_pwd_store[65];
+static void scan_poll_cb(lv_timer_t *t);
 
 /* Static SSID storage — avoids strdup/free heap fragmentation */
 #define MAX_SCAN_APS 20
@@ -40,7 +43,21 @@ void wifi_list_screen_register_select(void (*cb)(const char*)) { select_cb = cb;
 
 static void back_evt(lv_event_t *e)
 {
+    if(scan_poll_timer) {
+        lv_timer_del(scan_poll_timer);
+        scan_poll_timer = NULL;
+    }
+    wifi_service_cancel_scan();
     if(back_cb) back_cb();
+}
+
+static void saved_connect_clicked(lv_event_t *e)
+{
+    if(saved_ssid_store[0] == 0) return;
+    wifi_service_connect(saved_ssid_store, saved_pwd_store);
+    wifi_list_screen_refresh();
+    if(scan_poll_timer) lv_timer_del(scan_poll_timer);
+    scan_poll_timer = lv_timer_create(scan_poll_cb, 500, NULL);
 }
 
 void wifi_list_screen_create(lv_obj_t *parent)
@@ -69,13 +86,13 @@ void wifi_list_screen_create(lv_obj_t *parent)
     list = lv_list_create(scr);
     lv_obj_set_size(list, DISPLAY_WIDTH - 40, DISPLAY_HEIGHT - 105);
     lv_obj_align(list,LV_ALIGN_BOTTOM_MID,0,-5);
-    lv_obj_set_style_bg_color(list, COLOR_CARD, 0);
+    lv_obj_set_style_bg_color(list, ui_theme_card(), 0);
     lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(list, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_border_color(list, ui_theme_border(), 0);
     lv_obj_set_style_border_width(list, 1, 0);
     lv_obj_set_style_radius(list, 12, 0);
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(list, COLOR_TEXT, 0);
+    lv_obj_set_style_text_color(list, ui_theme_text(), 0);
 }
 
 
@@ -149,6 +166,11 @@ void wifi_list_screen_refresh(void)
     if(storage_load_wifi_credentials(saved_ssid, sizeof(saved_ssid),
                                      saved_pwd, sizeof(saved_pwd)))
     {
+        strncpy(saved_ssid_store, saved_ssid, sizeof(saved_ssid_store) - 1);
+        saved_ssid_store[sizeof(saved_ssid_store) - 1] = 0;
+        strncpy(saved_pwd_store, saved_pwd, sizeof(saved_pwd_store) - 1);
+        saved_pwd_store[sizeof(saved_pwd_store) - 1] = 0;
+
         /* Section header */
         lv_obj_t *sec = lv_label_create(list);
         lv_obj_set_style_text_font(sec, &lv_font_montserrat_16, 0);
@@ -161,7 +183,7 @@ void wifi_list_screen_refresh(void)
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_style_all(row);
         lv_obj_set_size(row, lv_pct(100), 60);
-        lv_obj_set_style_bg_color(row, lv_color_hex(0x1e293b), 0);
+        lv_obj_set_style_bg_color(row, ui_theme_row_even(), 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(row, 8, 0);
         lv_obj_set_style_pad_all(row, 8, 0);
@@ -182,6 +204,27 @@ void wifi_list_screen_refresh(void)
         lv_obj_set_flex_grow(lbl, 1);
         String display_str = String(status_icon) + " " + saved_ssid + status_txt;
         lv_label_set_text(lbl, display_str.c_str());
+
+        /* Button row */
+        lv_obj_t *btn_row = lv_obj_create(row);
+        lv_obj_remove_style_all(btn_row);
+        lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_pad_all(btn_row, 0, 0);
+        lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+        if(ws != WIFI_CONNECTED) {
+            lv_obj_t *cbtn = lv_btn_create(btn_row);
+            lv_obj_add_style(cbtn, &g_styles.btn_primary, 0);
+            lv_obj_set_size(cbtn, 130, 44);
+            lv_obj_t *clbl = lv_label_create(cbtn);
+            lv_obj_set_style_text_font(clbl, &lv_font_montserrat_16, 0);
+            lv_label_set_text(clbl, LV_SYMBOL_WIFI " CONNECT");
+            lv_obj_center(clbl);
+            lv_obj_add_event_cb(cbtn, saved_connect_clicked, LV_EVENT_RELEASED, NULL);
+        }
 
         /* Forget button */
         lv_obj_t *fbtn = lv_btn_create(row);
@@ -204,6 +247,10 @@ void wifi_list_screen_refresh(void)
 
     /* ── Scanned networks ── */
     uint8_t count = wifi_service_get_ap_count();
+    /* Filter: skip the already-connected SSID so the user can't accidentally
+       click it and override the current connection.                          */
+    String conn_ssid = wifi_service_get_connected_ssid();
+
     if(count == 0)
     {
         lv_obj_t *lbl = lv_label_create(list);
@@ -222,6 +269,7 @@ void wifi_list_screen_refresh(void)
         strncpy(ssid_store[i], ssid.c_str(), 32);
         ssid_store[i][32] = 0;
         if(ssid_store[i][0] == 0) continue;  // skip empty/hidden SSIDs
+        if(!conn_ssid.isEmpty() && ssid == conn_ssid) continue;  // skip connected network
         lv_obj_t *btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, ssid_store[i]);
         lv_obj_add_style(btn, &g_styles.list_btn, 0);
         lv_obj_add_event_cb(btn, ssid_clicked, LV_EVENT_RELEASED,
@@ -233,30 +281,38 @@ void wifi_list_screen_refresh(void)
 static void scan_poll_cb(lv_timer_t *t)
 {
     int status = wifi_service_scan_status();
+    wifi_state_t ws = wifi_service_state();
     if(status == -1) return;  /* still scanning */
 
-    /* Scan finished (success or failure) — stop timer */
-    lv_timer_del(t);
-    scan_poll_timer = NULL;
-
     wifi_list_screen_refresh();
+    if(ws != WIFI_CONNECTING) {
+        lv_timer_del(t);
+        scan_poll_timer = NULL;
+    }
 }
 
 /* Start async scan and show scanning indicator */
 void wifi_list_screen_start_scan(void)
 {
-    lv_obj_clean(list);
+    wifi_service_cancel_scan();
 
-    /* Show scanning message */
-    lv_obj_t *lbl = lv_label_create(list);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(lbl, COLOR_MUTED, 0);
-    lv_label_set_text(lbl, LV_SYMBOL_REFRESH "  Scanning for networks...");
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_pad_top(lbl, 30, 0);
+    char saved_ssid[33] = {0};
+    char saved_pwd[65] = {0};
+    bool has_saved = storage_load_wifi_credentials(saved_ssid, sizeof(saved_ssid),
+                                                   saved_pwd, sizeof(saved_pwd));
 
-    /* Start async scan */
+    if(has_saved && wifi_service_state() == WIFI_CONNECTING) {
+        /* A connection attempt is in progress — just refresh and poll status */
+        wifi_list_screen_refresh();
+        if(scan_poll_timer) lv_timer_del(scan_poll_timer);
+        scan_poll_timer = lv_timer_create(scan_poll_cb, 500, NULL);
+        return;
+    }
+
+    /* Show saved network row immediately (if any), then start scan */
+    wifi_list_screen_refresh();
+
+    /* Start async scan — always, even when saved credentials exist */
     wifi_service_start_scan();
 
     /* Poll for completion every 500ms */

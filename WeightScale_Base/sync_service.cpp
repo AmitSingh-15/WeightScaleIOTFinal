@@ -1,13 +1,3 @@
-#ifndef OTA_MODE_ACTIVE
-#define OTA_MODE_ACTIVE 0
-#endif
-
-#if ENABLE_CLOUD_SYNC && !OTA_MODE_ACTIVE
-    // Only run once every 5 minutes
-    if (now - last_sync_attempt < SYNC_INTERVAL_MS)
-        return;
-    // ...existing sync service code...
-#endif
 #include "app_config.h"  /* Must be first for feature flags */
 
 #if ENABLE_CLOUD_SYNC
@@ -18,6 +8,7 @@
 #include <HTTPClient.h>
 #include "storage_service.h"
 #include "wifi_service.h"
+#include "ota_service.h"
 #include "devlog.h"
 
 // Forward for deinit
@@ -34,6 +25,7 @@ static const char *BULK_URL =
 "https://dev.etranscargo.in/weightscale/api/WeightIngestion/bulk";
 
 static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
+static const unsigned long HTTPS_STARTUP_COOLDOWN_MS = 10000;
 
 static unsigned long last_sync_attempt = 0;
 static bool sync_busy = false;
@@ -58,6 +50,8 @@ void sync_service_init(void)
 {
     last_sync_attempt = 0;
     sync_busy = false;
+    sync_paused = false;
+    sync_deinited = false;
     last_http_done_ms = 0;
 }
 
@@ -128,7 +122,7 @@ static String build_payload(void)
 }
 
 /* =========================================================
-   MAIN LOOP (5 MINUTE INTERVAL)
+   MAIN LOOP
 ========================================================= */
 
 void sync_service_pause(void)
@@ -140,6 +134,8 @@ void sync_service_pause(void)
 void sync_service_resume(void)
 {
     sync_paused = false;
+    sync_deinited = false;
+    last_sync_attempt = millis();
     devlog_printf("[SYNC] Resumed after OTA");
 }
 
@@ -153,6 +149,7 @@ void sync_service_deinit(void)
         g_active_http = nullptr;
         devlog_printf("[SYNC] HTTP forcibly closed for OTA");
     }
+    last_http_done_ms = millis();
     devlog_printf("[SYNC] Deinitialized for OTA safe mode");
 }
 
@@ -162,7 +159,7 @@ void sync_service_loop(void)
 
     unsigned long now = millis();
 
-    // Only run once every 5 minutes
+    // Only run once every configured interval
     if (now - last_sync_attempt < SYNC_INTERVAL_MS)
         return;
 
@@ -174,12 +171,27 @@ void sync_service_loop(void)
         return;
     }
 
+    if (ota_service_is_busy())
+    {
+        devlog_printf("[SYNC] Deferred - OTA active");
+        last_sync_attempt = millis() - SYNC_INTERVAL_MS + 5000;
+        return;
+    }
+
     /* Don't do HTTPS while WiFi scan/connect is in progress — 
        TLS traffic over SDIO bus corrupts scan results on ESP32-P4 */
     if (wifi_service_is_critical())
     {
         devlog_printf("[SYNC] Deferred - WiFi busy (scan/connect)");
         last_sync_attempt = millis() - SYNC_INTERVAL_MS + 5000; // retry in 5s
+        return;
+    }
+
+    unsigned long connected_ms = wifi_service_connected_since_ms();
+    if (connected_ms == 0 || (millis() - connected_ms) < HTTPS_STARTUP_COOLDOWN_MS)
+    {
+        devlog_printf("[SYNC] Deferred - WiFi settling");
+        last_sync_attempt = millis() - SYNC_INTERVAL_MS + 5000;
         return;
     }
 
@@ -208,6 +220,7 @@ void sync_service_loop(void)
     if (!http.begin(client, HEALTH_URL))
     {
         devlog_printf("[SYNC] Health begin failed");
+        g_active_http = nullptr;
         sync_busy = false;
         last_http_done_ms = millis();
         return;
@@ -256,6 +269,7 @@ void sync_service_loop(void)
     if (!http.begin(client, BULK_URL))
     {
         devlog_printf("[SYNC] POST begin failed");
+        g_active_http = nullptr;
         sync_busy = false;
         last_http_done_ms = millis();
         return;

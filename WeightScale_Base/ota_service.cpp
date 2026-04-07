@@ -7,10 +7,10 @@
 #include <HTTPClient.h>
 #include <Update.h>
 #include <Preferences.h>
-#include <esp_wifi.h>
 #include "ota_service.h"
 #include "home_screen.h"
 #include "sync_service.h"
+#include "wifi_service.h"
 #include "devlog.h"  // ✅ Include devlog to use devlog_printf
 
 
@@ -18,23 +18,33 @@
 
 #define OTA_MODE_ACTIVE 1
 
-#include "esp_wifi.h"
-#include "esp_wifi_types.h"
+static bool ota_busy = false;
+static const unsigned long OTA_WIFI_SETTLE_MS = 10000;
 
-// ===== WIFI READY CHECK FOR OTA =====
-static bool wait_for_wifi_ready(int timeout_ms)
+static void ota_finish_attempt(bool resume_sync)
+{
+    ota_busy = false;
+    if (resume_sync) {
+        sync_service_resume();
+    }
+}
+
+static bool wait_for_wifi_settle(int timeout_ms)
 {
     int elapsed = 0;
     while (elapsed < timeout_ms) {
-        wifi_ap_record_t ap;
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            devlog_printf("[OTA] WiFi ready: %s", (char*)ap.ssid);
-            return true;
+        if (wifi_service_state() == WIFI_CONNECTED) {
+            unsigned long connected_ms = wifi_service_connected_since_ms();
+            if (connected_ms != 0 && (millis() - connected_ms) >= OTA_WIFI_SETTLE_MS) {
+                devlog_printf("[OTA] WiFi settled for %lu ms",
+                              (unsigned long)(millis() - connected_ms));
+                return true;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(200));
         elapsed += 200;
     }
-    devlog_printf("[OTA] WiFi NOT ready");
+    devlog_printf("[OTA] WiFi not settled");
     return false;
 }
 
@@ -44,10 +54,27 @@ static bool wait_for_wifi_ready(int timeout_ms)
 #define OTA_VERSION_URL    "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/refs/heads/main/firmware/version.txt"
 #define OTA_BIN_URL        "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/refs/heads/main/firmware/Weights.bin"
 
-static WiFiClientSecure client;
 static ota_display_cb_t display_cb = nullptr;
 static ota_progress_cb_t progress_cb = nullptr;
 static Preferences prefs;
+
+bool ota_service_is_busy(void)
+{
+    return ota_busy;
+}
+
+static bool begin_https(HTTPClient &http, WiFiClientSecure &client, const char *url, uint16_t timeout_ms)
+{
+    client.setInsecure();
+    client.setTimeout(timeout_ms);
+    http.setTimeout(timeout_ms);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    if (!http.begin(client, url)) {
+        return false;
+    }
+    http.addHeader("Connection", "close");
+    return true;
+}
 
 /* ================= VERSION STORAGE ================= */
 static String get_stored_version()
@@ -119,7 +146,6 @@ static bool is_newer_version(const String &remote)
 /* ================= INIT ================= */
 void ota_service_init(void)
 {
-    client.setInsecure(); // replace with certificate validation if needed
     String stored = get_stored_version();
     if (stored == "") {
         save_version(OTA_VERSION);
@@ -134,21 +160,53 @@ void ota_service_check_and_update(void)
 {
     devlog_printf("[OTA] Starting OTA check...");
 
-    if (WiFi.status() != WL_CONNECTED) {
-        if(display_cb) display_cb("OTA: Wi-Fi not connected");
-        devlog_printf("[OTA] Wi-Fi not connected");
+    if (ota_busy) {
+        devlog_printf("[OTA] OTA already in progress");
+        return;
+    }
+
+    if (wifi_service_state() != WIFI_CONNECTED) {
+        if(display_cb) display_cb("OTA: Wi-Fi offline");
+        devlog_printf("[OTA] Wi-Fi offline");
+        return;
+    }
+
+    if (wifi_service_is_critical()) {
+        if(display_cb) display_cb("OTA: Wi-Fi busy");
+        devlog_printf("[OTA] Wi-Fi busy with connect/scan");
+        return;
+    }
+
+    if (sync_service_is_busy()) {
+        if(display_cb) display_cb("OTA: Sync busy");
+        devlog_printf("[OTA] Sync busy, OTA deferred");
+        return;
+    }
+
+    ota_busy = true;
+    sync_service_pause();
+
+    if (!wait_for_wifi_settle(15000)) {
+        if(display_cb) display_cb("OTA: Wait for Wi-Fi");
+        ota_finish_attempt(true);
         return;
     }
 
     HTTPClient http;
-    http.setTimeout(15000);
-    http.begin(client, OTA_VERSION_URL);
+    WiFiClientSecure version_client;
+    if (!begin_https(http, version_client, OTA_VERSION_URL, 15000)) {
+        if(display_cb) display_cb("OTA: Version fetch fail");
+        devlog_printf("[OTA] Version fetch begin failed");
+        ota_finish_attempt(true);
+        return;
+    }
 
     int code = http.GET();
     if (code != 200) {
         if(display_cb) display_cb("OTA: Version fetch fail");
         devlog_printf("[OTA] Version fetch failed with code: %d", code);
         http.end();
+        ota_finish_attempt(true);
         return;
     }
 
@@ -161,19 +219,15 @@ void ota_service_check_and_update(void)
     delay(500);
 
     if (!is_newer_version(remote_version)) {
-        if(display_cb) display_cb("Latest Version");
+        if(display_cb) display_cb("OTA: Latest version");
         devlog_printf("[OTA] Device already on latest version: %s", remote_version.c_str());
+        ota_finish_attempt(true);
         return;
     }
 
 
     // ===== ENTER OTA SAFE MODE (CLEAN + CONTROLLED) =====
     devlog_printf("[OTA] Entering SAFE MODE");
-
-#if ENABLE_CLOUD_SYNC
-    sync_service_deinit();
-    devlog_printf("[OTA] Sync stopped");
-#endif
 
     scale_service_suspend();
     devlog_printf("[OTA] Scale suspended");
@@ -194,12 +248,14 @@ void ota_service_check_and_update(void)
         devlog_printf("[OTA] Heap too low for OTA: %lu bytes", (unsigned long)heap);
         if (display_cb) display_cb("OTA: Heap too low");
         vTaskDelay(pdMS_TO_TICKS(2000));
+        ota_finish_attempt(true);
         return;
     }
 
     // ===== WIFI STABILIZATION =====
-    if (!wait_for_wifi_ready(5000)) {
+    if (!wait_for_wifi_settle(5000)) {
         devlog_printf("[OTA] Abort: WiFi not ready");
+        ota_finish_attempt(true);
         return;
     }
     vTaskDelay(pdMS_TO_TICKS(500)); // stabilization delay
@@ -209,18 +265,22 @@ void ota_service_check_and_update(void)
     // All other bus-contending services (scale, sync) are suspended.
 
     #define OTA_CHUNK 4096
-    client.setTimeout(60);  // 60s read timeout
 
     HTTPClient http2;
-    http2.setTimeout(30000);
-    http2.begin(client, OTA_BIN_URL);
+    WiFiClientSecure bin_client;
+    if (!begin_https(http2, bin_client, OTA_BIN_URL, 30000)) {
+        devlog_printf("[OTA] Binary fetch begin failed");
+        if (display_cb) display_cb("OTA: Download failed");
+        ota_finish_attempt(true);
+        return;
+    }
     int httpCode = http2.GET();
 
     if (httpCode != 200) {
         devlog_printf("[OTA] Binary fetch failed: %d", httpCode);
         if (display_cb) display_cb("OTA: Download failed");
         http2.end();
-        sync_service_resume();
+        ota_finish_attempt(true);
         return;
     }
 
@@ -231,7 +291,7 @@ void ota_service_check_and_update(void)
         devlog_printf("[OTA] Invalid binary size");
         if (display_cb) display_cb("OTA: Bad file size");
         http2.end();
-        sync_service_resume();
+        ota_finish_attempt(true);
         return;
     }
 
@@ -239,7 +299,7 @@ void ota_service_check_and_update(void)
         devlog_printf("[OTA] Not enough space for OTA");
         if (display_cb) display_cb("OTA: No space");
         http2.end();
-        sync_service_resume();
+        ota_finish_attempt(true);
         return;
     }
 
@@ -249,11 +309,15 @@ void ota_service_check_and_update(void)
     int lastPct = -1;
     unsigned long lastActivity = millis();
 
-    devlog_printf("[OTA] Starting download (4KB chunks, throttled)...");
+    devlog_printf("[OTA] Starting download (4KB chunks)...");
 
     while (written < totalSize) {
         int avail = stream->available();
         if (avail <= 0) {
+            if (!stream->connected() && written < totalSize) {
+                devlog_printf("[OTA] Stream disconnected at %d/%d bytes", written, totalSize);
+                break;
+            }
             if (millis() - lastActivity > 120000UL) {  // 2 min timeout
                 devlog_printf("[OTA] Download stalled for 2min, aborting");
                 break;
@@ -273,7 +337,6 @@ void ota_service_check_and_update(void)
                 break;
             }
             written += len;
-            vTaskDelay(pdMS_TO_TICKS(10)); // 🔥 critical: prevents SDIO starvation
         } else {
             if (millis() - lastActivity > 120000UL) break;
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -299,14 +362,14 @@ void ota_service_check_and_update(void)
         Update.abort();
         devlog_printf("[OTA] Download incomplete: %d/%d bytes", written, totalSize);
         if (display_cb) display_cb("OTA: Download incomplete");
-        sync_service_resume();
+        ota_finish_attempt(true);
         return;
     }
 
     if (!Update.end(true)) {
         devlog_printf("[OTA] Update finalize failed");
         if (display_cb) display_cb("OTA: Finalize failed");
-        sync_service_resume();
+        ota_finish_attempt(true);
         return;
     }
 
@@ -315,6 +378,7 @@ void ota_service_check_and_update(void)
     devlog_printf("[OTA] Update successful! New version: %s", remote_version.c_str());
     home_screen_set_version(remote_version.c_str());
     if (display_cb) display_cb("Update success. Rebooting...");
+    ota_busy = false;
     delay(2000);
     ESP.restart();
 }

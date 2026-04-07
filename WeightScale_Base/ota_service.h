@@ -14,6 +14,7 @@ void ota_service_set_display_callback(ota_display_cb_t cb);
 void ota_service_set_progress_callback(ota_progress_cb_t cb);
 String ota_service_stored_version(void);
 String ota_service_current_version(void);
+bool ota_service_is_busy(void);
 
 #else
 
@@ -24,5 +25,6 @@ inline void ota_service_set_display_callback(ota_display_cb_t cb) { (void)cb; }
 inline void ota_service_set_progress_callback(ota_progress_cb_t cb) { (void)cb; }
 inline String ota_service_stored_version(void) { return ""; }
 inline String ota_service_current_version(void) { return ""; }
+inline bool ota_service_is_busy(void) { return false; }
 
 #endif

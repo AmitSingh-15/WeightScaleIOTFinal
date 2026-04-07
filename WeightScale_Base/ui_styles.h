@@ -40,6 +40,22 @@ extern "C" {
 extern ui_styles_t g_styles;
 
 void ui_styles_init(void);
+void ui_styles_set_theme(bool light_mode);
+bool ui_styles_is_light_mode(void);
+
+/* ── Runtime theme-aware color helpers ─────────────────────────────────────
+   Use these instead of COLOR_* macros or hardcoded hex values when setting
+   inline styles in screen-create functions, so every screen respects the
+   active theme regardless of when it was created.                          */
+static inline lv_color_t ui_theme_bg(void)      { return ui_styles_is_light_mode() ? lv_color_hex(0xF1F5F9) : lv_color_hex(0x0F172A); }
+static inline lv_color_t ui_theme_card(void)    { return ui_styles_is_light_mode() ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x1E293B); }
+static inline lv_color_t ui_theme_surface(void) { return ui_styles_is_light_mode() ? lv_color_hex(0xDDE3EA) : lv_color_hex(0x0C1222); }
+static inline lv_color_t ui_theme_text(void)    { return ui_styles_is_light_mode() ? lv_color_hex(0x0F172A) : lv_color_hex(0xFFFFFF); }
+static inline lv_color_t ui_theme_muted(void)   { return ui_styles_is_light_mode() ? lv_color_hex(0x475569) : lv_color_hex(0x94A3B8); }
+static inline lv_color_t ui_theme_accent(void)  { return ui_styles_is_light_mode() ? lv_color_hex(0x0369A1) : lv_color_hex(0x38BDF8); }
+static inline lv_color_t ui_theme_border(void)  { return ui_styles_is_light_mode() ? lv_color_hex(0xCBD5E1) : lv_color_hex(0x334155); }
+static inline lv_color_t ui_theme_row_even(void){ return ui_styles_is_light_mode() ? lv_color_hex(0xF1F5F9) : lv_color_hex(0x1E293B); }
+static inline lv_color_t ui_theme_row_odd(void) { return ui_styles_is_light_mode() ? lv_color_hex(0xE2E8F0) : lv_color_hex(0x162032); }
 
 #ifdef __cplusplus
 }

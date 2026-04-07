@@ -159,6 +159,18 @@ static void wifi_popup_kb_event(lv_event_t *e)
     if(code == LV_EVENT_CANCEL)
     {
         devlog_printf("[WIFI POPUP] Cancel pressed");
+        /* Synchronously kill timers NOW — async destroy runs later and may be
+           too late if connect_delay_timer fires in the meantime (triggering
+           an unintended wifi_service_connect for the wrong SSID).           */
+        if(wp->connect_delay_timer) {
+            lv_timer_del(wp->connect_delay_timer);
+            wp->connect_delay_timer = NULL;
+        }
+        if(wp->result_timer) {
+            lv_timer_del(wp->result_timer);
+            wp->result_timer = NULL;
+        }
+        wp->destroyed = true;  /* prevent any remaining callbacks */
         lv_async_call(wifi_popup_destroy_async, wp);
         wifi_list_screen_show();
     }

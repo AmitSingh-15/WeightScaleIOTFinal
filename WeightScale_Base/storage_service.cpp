@@ -148,6 +148,16 @@ bool storage_load_dev_mode(void)
     return prefs.getBool("dev_mode", false);
 }
 
+void storage_save_light_mode(bool on)
+{
+    prefs.putBool("light_mode", on);
+}
+
+bool storage_load_light_mode(void)
+{
+    return prefs.getBool("light_mode", false);
+}
+
 /* =========================================================
    DEVELOPER LOG STORAGE (persistent across reboots)
 =========================================================*/

@@ -63,9 +63,9 @@ static unsigned long g_test_weight_ms = 0;
 static float g_test_weight_val = 0.0f;
 
 /* ===== STABILITY DETECTION STATE ===== */
-static float  g_stable_weight   = 0.0f;
+static float g_stable_weight = 0.0f;
 static unsigned long g_stable_start = 0;
-static bool   g_weight_captured  = false;  /* prevents duplicate capture */
+static bool g_weight_captured = false;  /* prevents duplicate capture */
 
 /* Forward declaration */
 static void app_controller_notify_invoice_update(void);
@@ -186,6 +186,10 @@ void app_controller_init(void)
         }
     }
 
+    /* Apply stored display theme (light/dark) */
+    if(storage_load_light_mode())
+        ui_styles_set_theme(true);
+
     devlog_printf("[CTRL] ✓ All services initialized");
     g_initialized = true;
 }
@@ -216,8 +220,18 @@ void app_controller_loop(void)
     if (g_wifi_safe) sync_service_loop();
 #endif
 
+    if (g_test_mode) {
+        unsigned long now = millis();
+        if (g_test_weight_ms == 0 || (now - g_test_weight_ms) >= 1000) {
+            g_test_weight_ms = now;
+            uint32_t r = esp_random() % 2500U;  /* 0.00 .. 24.99 kg */
+            g_test_weight_val = (float)r / 100.0f;
+            if (g_test_weight_val < 0.10f) g_test_weight_val = 0.0f;
+        }
+    }
+
     // ===== AUTO ADD ITEM LOGIC =====
-    float w = scale_service_get_weight();
+    float w = g_test_mode ? g_test_weight_val : scale_service_get_weight();
     if (w > 0.001f && g_manual_offset != 0.0f) {
         w += g_manual_offset;
         if (w < 0.0f) w = 0.0f;
@@ -227,11 +241,21 @@ void app_controller_loop(void)
         if (g_weight_update_cb) g_weight_update_cb(w);
     }
 
-    float stable_weight = 0.0f;
-    if (scale_service_should_add_item(&stable_weight)) {
-        invoice_session_add_weight_entry(stable_weight);
+    if (fabsf(w - g_stable_weight) >= 0.02f) {
+        g_stable_weight = w;
+        g_stable_start = millis();
+        g_weight_captured = false;
+    } else if (!g_weight_captured && w >= 0.05f && g_stable_start != 0 &&
+               (millis() - g_stable_start) > 600) {
+        invoice_session_add_weight_entry(w);
+        invoice_session_set_selected_qty(1);
         app_controller_notify_invoice_update();
-        Serial.printf("[FLOW] Auto-added item: %.2f kg\n", stable_weight);
+        g_weight_captured = true;
+        Serial.printf("[FLOW] Auto-added stable item: %.2f kg\n", w);
+    }
+
+    if (w < 0.05f) {
+        g_weight_captured = false;
     }
 }
 
@@ -305,6 +329,12 @@ static void app_controller_restore_home_screen(void)
 #if ENABLE_WIFI_SERVICE
     home_screen_set_sync_status(g_wifi_connected ? "Online" : "Offline");
 #endif
+    /* Restore device name — home_screen_create() resets the label to "Device: -" */
+    {
+        char dev_name[64] = {0};
+        if(storage_load_device_name(dev_name, sizeof(dev_name)))
+            home_screen_set_device(dev_name);
+    }
     devlog_printf("[CTRL] Returned to home");
 }
 
@@ -769,6 +799,7 @@ void app_controller_handle_ui_event(int event_id)
             devlog_printf("[CTRL] → Save weight item");
             if (g_last_weight >= 0.05f) {
                 invoice_session_add_weight_entry(g_last_weight);
+                invoice_session_set_selected_qty(1);
                 g_weight_captured = true;  /* prevent duplicate auto-capture */
                 devlog_printf("[CTRL] Added weight %.2f kg, qty %d",
                               g_last_weight, invoice_session_get_selected_qty());
@@ -919,8 +950,10 @@ void app_controller_set_test_mode(bool on)
     g_test_mode = on;
     if (on) {
         g_test_weight_ms = 0; /* trigger immediate first weight */
+        g_test_weight_val = 0.0f;
         devlog_printf("[CTRL] Test mode ENABLED");
     } else {
+        g_test_weight_val = 0.0f;
         devlog_printf("[CTRL] Test mode DISABLED");
     }
 }

@@ -6,7 +6,7 @@
 
 // Enable WiFi and networking services
 #define ENABLE_WIFI_SERVICE        1  // Enabled for WiFi scan
-#define ENABLE_OTA_UPDATES         0  // Disabled for now
+#define ENABLE_OTA_UPDATES         1  // Enabled
 #define ENABLE_CLOUD_SYNC          1  // Enabled
 
 // Enable specific hardware features

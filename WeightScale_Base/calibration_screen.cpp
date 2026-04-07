@@ -89,13 +89,13 @@ void calibration_screen_create(lv_obj_t *parent)
 
     lbl_weight = lv_label_create(live);
     lv_obj_add_style(lbl_weight,&g_styles.value_big,0);
-    lv_label_set_text(lbl_weight,"0.000 kg");
+    lv_label_set_text(lbl_weight,"0.00 kg");
     lv_obj_align(lbl_weight,LV_ALIGN_CENTER,0,-5);
 
     lbl_raw = lv_label_create(live);
     lv_obj_set_style_text_font(lbl_raw, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(lbl_raw, COLOR_MUTED, 0);
-    lv_label_set_text(lbl_raw,"RAW: 0.000 kg");
+    lv_label_set_text(lbl_raw,"RAW: 0.00 kg");
     lv_obj_align(lbl_raw,LV_ALIGN_BOTTOM_MID,0,-10);
 
     /* ===== PROFILE SELECT ===== */
@@ -180,12 +180,12 @@ void calibration_screen_set_live(float weight,float raw)
 #endif
 
     int value = (int)(weight * 100);
-    lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%03d kg", value / 100, abs(value % 100));
+    lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%02d kg", value / 100, abs(value % 100));
     
     lv_label_set_text(lbl_weight, g_cal_buf);
 
     int value1 = (int)(raw * 100);
-    lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%03d", value1 / 100, abs(value1 % 100));
+    lv_snprintf(g_cal_buf, sizeof(g_cal_buf), "%d.%02d", value1 / 100, abs(value1 % 100));
     lv_label_set_text(lbl_raw, g_cal_buf);
 }
 #ifdef __cplusplus

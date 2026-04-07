@@ -34,6 +34,7 @@ static lv_obj_t *wifi_list_scr = NULL;
 static lv_obj_t *ota_status_label = NULL;
 static lv_obj_t *device_name_label = NULL;
 static lv_obj_t *device_id_label = NULL;
+static lv_obj_t *offset_lbl = NULL;
 /* WiFi state change callback */
 static void wifi_state_cb(wifi_state_t s)
 {
@@ -69,6 +70,78 @@ static void hide_connecting_overlay()
         lv_obj_del(connecting_overlay);
 
     connecting_overlay = NULL;
+}
+
+/* ================= OTA FULLSCREEN OVERLAY ================= */
+
+static lv_obj_t *ota_overlay = NULL;
+static lv_obj_t *ota_overlay_label = NULL;
+static lv_obj_t *ota_overlay_bar = NULL;
+static lv_obj_t *ota_overlay_pct = NULL;
+
+static void show_ota_overlay(const char *msg)
+{
+    if (ota_overlay) return;
+    lv_obj_t *scr = lv_scr_act();
+    ota_overlay = lv_obj_create(scr);
+    lv_obj_remove_style_all(ota_overlay);
+    lv_obj_set_size(ota_overlay, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_obj_set_style_bg_color(ota_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(ota_overlay, LV_OPA_90, 0);
+    lv_obj_add_flag(ota_overlay, LV_OBJ_FLAG_CLICKABLE); /* block touches */
+    lv_obj_move_foreground(ota_overlay);
+
+    /* Title */
+    ota_overlay_label = lv_label_create(ota_overlay);
+    lv_obj_set_style_text_color(ota_overlay_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(ota_overlay_label, &lv_font_montserrat_28, 0);
+    lv_label_set_text(ota_overlay_label, msg);
+    lv_obj_align(ota_overlay_label, LV_ALIGN_CENTER, 0, -60);
+
+    /* Progress bar */
+    ota_overlay_bar = lv_bar_create(ota_overlay);
+    lv_obj_set_size(ota_overlay_bar, 500, 30);
+    lv_bar_set_range(ota_overlay_bar, 0, 100);
+    lv_bar_set_value(ota_overlay_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(ota_overlay_bar, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_color(ota_overlay_bar, lv_color_hex(0x22D3EE), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(ota_overlay_bar, 8, 0);
+    lv_obj_set_style_radius(ota_overlay_bar, 8, LV_PART_INDICATOR);
+    lv_obj_align(ota_overlay_bar, LV_ALIGN_CENTER, 0, 0);
+
+    /* Percent label */
+    ota_overlay_pct = lv_label_create(ota_overlay);
+    lv_obj_set_style_text_color(ota_overlay_pct, lv_color_white(), 0);
+    lv_obj_set_style_text_font(ota_overlay_pct, &lv_font_montserrat_20, 0);
+    lv_label_set_text(ota_overlay_pct, "0%");
+    lv_obj_align(ota_overlay_pct, LV_ALIGN_CENTER, 0, 35);
+}
+
+static void update_ota_overlay_msg(const char *msg)
+{
+    if (ota_overlay_label && lv_obj_is_valid(ota_overlay_label))
+        lv_label_set_text(ota_overlay_label, msg);
+}
+
+static void update_ota_overlay_progress(int pct)
+{
+    if (ota_overlay_bar && lv_obj_is_valid(ota_overlay_bar))
+        lv_bar_set_value(ota_overlay_bar, pct, LV_ANIM_OFF);
+    if (ota_overlay_pct && lv_obj_is_valid(ota_overlay_pct)) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d%%", pct);
+        lv_label_set_text(ota_overlay_pct, buf);
+    }
+}
+
+static void hide_ota_overlay(void)
+{
+    if (ota_overlay && lv_obj_is_valid(ota_overlay))
+        lv_obj_del(ota_overlay);
+    ota_overlay = NULL;
+    ota_overlay_label = NULL;
+    ota_overlay_bar = NULL;
+    ota_overlay_pct = NULL;
 }
 
 /* ================= EVENTS ================= */
@@ -127,14 +200,28 @@ static void dev_mode_changed(lv_event_t *e)
     storage_save_dev_mode(on);
     if(on)
     {
-        devlog_load_from_storage();
-        if(dev_log_ta && lv_obj_is_valid(dev_log_ta))
+        if(dev_log_ta && lv_obj_is_valid(dev_log_ta)) {
+            lv_obj_clear_flag(dev_log_ta, LV_OBJ_FLAG_HIDDEN);
             lv_textarea_set_text(dev_log_ta, devlog_get_text().c_str());
+        }
+        if(!devlog_timer) {
+            devlog_timer = lv_timer_create(
+                [](lv_timer_t *t){
+                    if(dev_log_ta && lv_obj_is_valid(dev_log_ta))
+                        lv_textarea_set_text(dev_log_ta, devlog_get_text().c_str());
+                },
+                1000, NULL
+            );
+        }
     }
     else
     {
         if(dev_log_ta && lv_obj_is_valid(dev_log_ta))
-            lv_textarea_set_text(dev_log_ta, "Developer mode disabled");
+            lv_obj_add_flag(dev_log_ta, LV_OBJ_FLAG_HIDDEN);
+        if(devlog_timer) {
+            lv_timer_del(devlog_timer);
+            devlog_timer = NULL;
+        }
     }
 }
 
@@ -176,6 +263,12 @@ void settings_screen_create(lv_obj_t *parent)
         dev_log_ta = NULL;
         dev_mode_sw = NULL;
         wifi_list_scr = NULL;
+        offset_lbl = NULL;
+        ota_overlay = NULL;
+        ota_overlay_label = NULL;
+        ota_overlay_bar = NULL;
+        ota_overlay_pct = NULL;
+        if(devlog_timer) { lv_timer_del(devlog_timer); devlog_timer = NULL; }
     }, LV_EVENT_DELETE, NULL);
 
     lv_obj_add_style(parent, &g_styles.screen, 0);
@@ -256,16 +349,28 @@ lv_timer_create([](lv_timer_t *t){
         lv_refr_now(NULL);
     }
 
-    xTaskCreate(
+    show_ota_overlay("Checking for update...");
+
+    devlog_printf("[OTA] Starting OTA check task...");
+
+    /* Suspend scale service during OTA to reduce SDIO bus contention */
+    scale_service_suspend();
+
+    xTaskCreatePinnedToCore(
         [](void *param){
             ota_service_check_and_update();
+            /* Resume scale service after OTA completes (unless rebooting) */
+            scale_service_resume();
+            /* Hide overlay on task end (failure/no-update path) */
+            lv_async_call([](void *d){ hide_ota_overlay(); }, NULL);
             vTaskDelete(NULL);
         },
         "ota_task",
-        8192,
+        16384,
         NULL,
-        1,
-        NULL
+        3,       // prio 3 for OTA safe mode
+        NULL,
+        0        // pin to Core 0 — Core 1 used by scale/LVGL
     );
 
 }, 300, NULL);
@@ -280,16 +385,34 @@ lv_timer_create([](lv_timer_t *t){
 
     /* ✅ THREAD SAFE CALLBACK */
     ota_service_set_display_callback([](const String &msg){
+        devlog_printf("[OTA] %s", msg.c_str());
         char *msg_copy = strdup(msg.c_str());
         lv_async_call([](void *data){
             const char *text = (const char *)data;
             if(ota_status_label && lv_obj_is_valid(ota_status_label))
             {
                 lv_label_set_text(ota_status_label, text);
-                lv_refr_now(NULL);
+            }
+            update_ota_overlay_msg(text);
+            /* Hide overlay on final states (failure) */
+            if(strstr(text, "failed") || strstr(text, "No update") || strstr(text, "Already")) {
+                hide_ota_overlay();
             }
             free(data);
         }, msg_copy);
+    });
+
+    /* ✅ THREAD SAFE PROGRESS CALLBACK */
+    ota_service_set_progress_callback([](int pct){
+        int *p = (int *)malloc(sizeof(int));
+        if(p) {
+            *p = pct;
+            lv_async_call([](void *data){
+                int percent = *(int *)data;
+                update_ota_overlay_progress(percent);
+                free(data);
+            }, p);
+        }
     });
 
     /* --- Device Info row --- */
@@ -445,6 +568,95 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_add_event_cb(clear_logs_btn, clear_logs_cb, LV_EVENT_RELEASED, NULL);
     lv_label_set_text(lv_label_create(clear_logs_btn), LV_SYMBOL_TRASH " Clear Logs");
 
+    /* --- Manual Weight Offset row --- */
+
+    lv_obj_t *offset_row = lv_obj_create(card);
+    lv_obj_remove_style_all(offset_row);
+    lv_obj_set_size(offset_row, lv_pct(100), 75);
+    lv_obj_align(offset_row, LV_ALIGN_TOP_LEFT, 0, 330);
+    lv_obj_set_flex_flow(offset_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(offset_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(offset_row, 12, 0);
+    lv_obj_set_style_pad_left(offset_row, 10, 0);
+
+    lv_obj_t *off_title = lv_label_create(offset_row);
+    lv_obj_set_style_text_font(off_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(off_title, COLOR_TEXT, 0);
+    lv_label_set_text(off_title, "Manual Offset (kg):");
+
+    /* [-] button */
+    lv_obj_t *off_minus = lv_btn_create(offset_row);
+    lv_obj_add_style(off_minus, &g_styles.btn_danger, 0);
+    lv_obj_set_size(off_minus, 65, 55);
+    lv_obj_t *ml = lv_label_create(off_minus);
+    lv_obj_set_style_text_font(ml, &lv_font_montserrat_28, 0);
+    lv_label_set_text(ml, "-");
+    lv_obj_center(ml);
+
+    /* Offset value label */
+    offset_lbl = lv_label_create(offset_row);
+    lv_obj_set_style_text_font(offset_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(offset_lbl, lv_color_hex(0x22D3EE), 0);
+    lv_obj_set_width(offset_lbl, 120);
+    lv_obj_set_style_text_align(offset_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    {
+        extern float app_controller_get_manual_offset(void);
+        float cur = app_controller_get_manual_offset();
+        char obuf[16];
+        snprintf(obuf, sizeof(obuf), "%+.2f", cur);
+        lv_label_set_text(offset_lbl, obuf);
+    }
+
+    /* [+] button */
+    lv_obj_t *off_plus = lv_btn_create(offset_row);
+    lv_obj_add_style(off_plus, &g_styles.btn_primary, 0);
+    lv_obj_set_size(off_plus, 65, 55);
+    lv_obj_t *pl = lv_label_create(off_plus);
+    lv_obj_set_style_text_font(pl, &lv_font_montserrat_28, 0);
+    lv_label_set_text(pl, "+");
+    lv_obj_center(pl);
+
+    /* Reset button */
+    lv_obj_t *off_reset = lv_btn_create(offset_row);
+    lv_obj_add_style(off_reset, &g_styles.btn_secondary, 0);
+    lv_obj_set_size(off_reset, 100, 55);
+    lv_obj_t *rl = lv_label_create(off_reset);
+    lv_obj_set_style_text_font(rl, &lv_font_montserrat_16, 0);
+    lv_label_set_text(rl, "RESET");
+    lv_obj_center(rl);
+
+    /* [-] callback: decrease by 0.05 */
+    lv_obj_add_event_cb(off_minus, [](lv_event_t *e){
+        extern float app_controller_get_manual_offset(void);
+        extern void app_controller_set_manual_offset(float);
+        float cur = app_controller_get_manual_offset() - 0.05f;
+        app_controller_set_manual_offset(cur);
+        char obuf[16];
+        snprintf(obuf, sizeof(obuf), "%+.2f", cur);
+        if(offset_lbl && lv_obj_is_valid(offset_lbl))
+            lv_label_set_text(offset_lbl, obuf);
+    }, LV_EVENT_RELEASED, NULL);
+
+    /* [+] callback: increase by 0.05 */
+    lv_obj_add_event_cb(off_plus, [](lv_event_t *e){
+        extern float app_controller_get_manual_offset(void);
+        extern void app_controller_set_manual_offset(float);
+        float cur = app_controller_get_manual_offset() + 0.05f;
+        app_controller_set_manual_offset(cur);
+        char obuf[16];
+        snprintf(obuf, sizeof(obuf), "%+.2f", cur);
+        if(offset_lbl && lv_obj_is_valid(offset_lbl))
+            lv_label_set_text(offset_lbl, obuf);
+    }, LV_EVENT_RELEASED, NULL);
+
+    /* Reset callback: set to 0 */
+    lv_obj_add_event_cb(off_reset, [](lv_event_t *e){
+        extern void app_controller_set_manual_offset(float);
+        app_controller_set_manual_offset(0.0f);
+        if(offset_lbl && lv_obj_is_valid(offset_lbl))
+            lv_label_set_text(offset_lbl, "+0.00");
+    }, LV_EVENT_RELEASED, NULL);
+
     /* WiFi List Screen */
     wifi_list_scr = lv_obj_create(NULL);
     wifi_list_screen_create(wifi_list_scr);
@@ -461,20 +673,18 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_set_style_text_font(dev_log_ta, &lv_font_montserrat_14, 0);
     lv_obj_set_style_border_color(dev_log_ta, lv_color_hex(0x334155), 0);
 
-    /* Load logs from storage on startup */
-    if(was) devlog_load_from_storage();
-    lv_textarea_set_text(dev_log_ta, was ? devlog_get_text().c_str() : "Developer mode off");
-
-    if(was)
-    {
+    /* Show/hide based on dev mode state */
+    if(was) {
+        lv_textarea_set_text(dev_log_ta, devlog_get_text().c_str());
         devlog_timer = lv_timer_create(
             [](lv_timer_t *t){
                 if(dev_log_ta && lv_obj_is_valid(dev_log_ta))
                     lv_textarea_set_text(dev_log_ta, devlog_get_text().c_str());
             },
-            1000,
-            NULL
+            1000, NULL
         );
+    } else {
+        lv_obj_add_flag(dev_log_ta, LV_OBJ_FLAG_HIDDEN);
     }
 
     wifi_service_register_state_callback(wifi_state_cb);

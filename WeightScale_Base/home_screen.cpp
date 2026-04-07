@@ -295,7 +295,7 @@ void home_screen_create(lv_obj_t *parent)
     lbl_weight = lv_label_create(weight_box);
     lv_obj_set_style_text_font(lbl_weight, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(lbl_weight, lv_color_hex(0x22D3EE), 0);
-    lv_label_set_text(lbl_weight,"0.000");
+    lv_label_set_text(lbl_weight,"0.00");
     lv_obj_align(lbl_weight, LV_ALIGN_CENTER, 0, 12);
 
     /* ===== QUANTITY KEYPAD ===== */
@@ -487,7 +487,7 @@ void home_screen_set_weight(float w)
 {
     if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) return;
 
-    snprintf(g_format_buf, sizeof(g_format_buf), "%.3f", w);
+    snprintf(g_format_buf, sizeof(g_format_buf), "%.2f", w);
     lv_label_set_text(lbl_weight, g_format_buf);
 }
 

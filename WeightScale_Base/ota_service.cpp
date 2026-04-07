@@ -4,20 +4,49 @@
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <HTTPUpdate.h>
+#include <HTTPClient.h>
+#include <Update.h>
 #include <Preferences.h>
+#include <esp_wifi.h>
 #include "ota_service.h"
 #include "home_screen.h"
+#include "sync_service.h"
 #include "devlog.h"  // ✅ Include devlog to use devlog_printf
 
+
+#include "scale_service_v2.h"  // For scale_service_suspend
+
+#define OTA_MODE_ACTIVE 1
+
+#include "esp_wifi.h"
+#include "esp_wifi_types.h"
+
+// ===== WIFI READY CHECK FOR OTA =====
+static bool wait_for_wifi_ready(int timeout_ms)
+{
+    int elapsed = 0;
+    while (elapsed < timeout_ms) {
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            devlog_printf("[OTA] WiFi ready: %s", (char*)ap.ssid);
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+        elapsed += 200;
+    }
+    devlog_printf("[OTA] WiFi NOT ready");
+    return false;
+}
+
 // ===== OTA CONFIG =====
-#define OTA_VERSION        "1.0.8"             // current firmware version
+#define OTA_VERSION        "1.1.0"             // current firmware version
 #define OTA_DEFAULT_VERSION OTA_VERSION
-#define OTA_VERSION_URL    "https://raw.githubusercontent.com/rameshkadam61/weighingscale/refs/heads/main/firmware/version.txt"
-#define OTA_BIN_URL        "https://raw.githubusercontent.com/rameshkadam61/weighingscale/refs/heads/main/firmware/Weights.bin"
+#define OTA_VERSION_URL    "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/refs/heads/main/firmware/version.txt"
+#define OTA_BIN_URL        "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/refs/heads/main/firmware/Weights.bin"
 
 static WiFiClientSecure client;
 static ota_display_cb_t display_cb = nullptr;
+static ota_progress_cb_t progress_cb = nullptr;
 static Preferences prefs;
 
 /* ================= VERSION STORAGE ================= */
@@ -49,6 +78,11 @@ static void save_version(const String &ver)
 void ota_service_set_display_callback(ota_display_cb_t cb)
 {
     display_cb = cb;
+}
+
+void ota_service_set_progress_callback(ota_progress_cb_t cb)
+{
+    progress_cb = cb;
 }
 
 String ota_service_current_version(void)
@@ -101,13 +135,13 @@ void ota_service_check_and_update(void)
     devlog_printf("[OTA] Starting OTA check...");
 
     if (WiFi.status() != WL_CONNECTED) {
-        if(display_cb) display_cb("[OTA] Wi-Fi not connected");
+        if(display_cb) display_cb("OTA: Wi-Fi not connected");
         devlog_printf("[OTA] Wi-Fi not connected");
         return;
     }
 
     HTTPClient http;
-    http.setTimeout(5000);
+    http.setTimeout(15000);
     http.begin(client, OTA_VERSION_URL);
 
     int code = http.GET();
@@ -132,60 +166,157 @@ void ota_service_check_and_update(void)
         return;
     }
 
-    if (display_cb) display_cb("Updating to " + remote_version);
-    devlog_printf("[OTA] New version detected. Updating to %s", remote_version.c_str());
-    delay(500);
 
-    // OTA progress callback
-    httpUpdate.onProgress([&](int cur, int total) {
-        int percent = (cur * 100) / total;
-        devlog_printf("[OTA] Update progress: %d%%", percent);
-    });
+    // ===== ENTER OTA SAFE MODE (CLEAN + CONTROLLED) =====
+    devlog_printf("[OTA] Entering SAFE MODE");
 
-    t_httpUpdate_return ret = httpUpdate.update(client, OTA_BIN_URL);
+#if ENABLE_CLOUD_SYNC
+    sync_service_deinit();
+    devlog_printf("[OTA] Sync stopped");
+#endif
 
-      String stored;
-      String current;
+    scale_service_suspend();
+    devlog_printf("[OTA] Scale suspended");
 
-    switch (ret) {
-        case HTTP_UPDATE_OK:{
-            save_version(remote_version); // ✅ save new version before reboot
-            devlog_printf("[OTA] Update successful. New version saved: %s", remote_version.c_str());
+    // Reduce UI load (DO NOT kill LVGL completely)
+    // lv_timer_pause_all(); // Not available in LVGL 8.x
+    lv_obj_clean(lv_scr_act());
 
-        
-            devlog_printf("[OTA] Update successful. New version: %s", remote_version.c_str());
-            home_screen_set_version(remote_version.c_str());
-            
-        
-                  // Fetch and log versions for debugging
-             String stored = ota_service_stored_version();
-              devlog_printf("[OTA] Stored version (from Preferences): %s", stored.c_str());
-        
-              String current = ota_service_current_version();
-              devlog_printf("[OTA] Current version (from get_stored_version): %s", current.c_str());
-                      
-            
-                if(display_cb) display_cb("Update success. Rebooting...");
-                delay(2000);
-           // ESP.restart();
-            break;
+    // Show simple OTA message
+    lv_obj_t *label = lv_label_create(lv_scr_act());
+    lv_label_set_text(label, "Updating...\nDo not turn off");
+    lv_obj_center(label);
+
+    // Heap check before OTA
+    size_t heap = esp_get_free_heap_size();
+    devlog_printf("[OTA] Heap before OTA: %lu", (unsigned long)heap);
+    if (heap < 250 * 1024) {
+        devlog_printf("[OTA] Heap too low for OTA: %lu bytes", (unsigned long)heap);
+        if (display_cb) display_cb("OTA: Heap too low");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        return;
     }
-        case HTTP_UPDATE_FAILED:
-            if(display_cb) {
-                display_cb(String("Update failed: ") +
-                           httpUpdate.getLastError() +
-                           " " +
-                           httpUpdate.getLastErrorString());
+
+    // ===== WIFI STABILIZATION =====
+    if (!wait_for_wifi_ready(5000)) {
+        devlog_printf("[OTA] Abort: WiFi not ready");
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500)); // stabilization delay
+
+    // ===== SINGLE-CONNECTION OTA DOWNLOAD =====
+    // 4KB chunks, no artificial delay — let the TCP stack flow naturally.
+    // All other bus-contending services (scale, sync) are suspended.
+
+    #define OTA_CHUNK 4096
+    client.setTimeout(60);  // 60s read timeout
+
+    HTTPClient http2;
+    http2.setTimeout(30000);
+    http2.begin(client, OTA_BIN_URL);
+    int httpCode = http2.GET();
+
+    if (httpCode != 200) {
+        devlog_printf("[OTA] Binary fetch failed: %d", httpCode);
+        if (display_cb) display_cb("OTA: Download failed");
+        http2.end();
+        sync_service_resume();
+        return;
+    }
+
+    int totalSize = http2.getSize();
+    devlog_printf("[OTA] Binary size: %d bytes", totalSize);
+
+    if (totalSize <= 0) {
+        devlog_printf("[OTA] Invalid binary size");
+        if (display_cb) display_cb("OTA: Bad file size");
+        http2.end();
+        sync_service_resume();
+        return;
+    }
+
+    if (!Update.begin(totalSize)) {
+        devlog_printf("[OTA] Not enough space for OTA");
+        if (display_cb) display_cb("OTA: No space");
+        http2.end();
+        sync_service_resume();
+        return;
+    }
+
+    WiFiClient *stream = http2.getStreamPtr();
+    uint8_t buffer[OTA_CHUNK];
+    int written = 0;
+    int lastPct = -1;
+    unsigned long lastActivity = millis();
+
+    devlog_printf("[OTA] Starting download (4KB chunks, throttled)...");
+
+    while (written < totalSize) {
+        int avail = stream->available();
+        if (avail <= 0) {
+            if (millis() - lastActivity > 120000UL) {  // 2 min timeout
+                devlog_printf("[OTA] Download stalled for 2min, aborting");
+                break;
             }
-            devlog_printf("[OTA] Update failed: %d %s", httpUpdate.getLastError(), httpUpdate.getLastErrorString());
-            delay(500);
-            break;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
 
-        case HTTP_UPDATE_NO_UPDATES:
-            if(display_cb) display_cb("No Update");
-            devlog_printf("[OTA] No updates available.");
-            break;
+        int toRead = min(avail, (int)OTA_CHUNK);
+        toRead = min(toRead, totalSize - written);
+        int len = stream->readBytes(buffer, toRead);
+
+        if (len > 0) {
+            size_t bytesWritten = Update.write(buffer, len);
+            if (bytesWritten != (size_t)len) {
+                devlog_printf("[OTA] Flash write failed: wrote %d of %d", bytesWritten, len);
+                break;
+            }
+            written += len;
+            vTaskDelay(pdMS_TO_TICKS(10)); // 🔥 critical: prevents SDIO starvation
+        } else {
+            if (millis() - lastActivity > 120000UL) break;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        lastActivity = millis();
+
+        int pct = (written * 100) / totalSize;
+        if (pct != lastPct) {
+            lastPct = pct;
+            if (progress_cb) progress_cb(pct);
+            if (pct % 5 == 0) {
+                devlog_printf("[OTA] Progress: %d%% (%d/%d)", pct, written, totalSize);
+            }
+        }
     }
+
+
+    http2.end();
+
+    if (written != totalSize) {
+        Update.abort();
+        devlog_printf("[OTA] Download incomplete: %d/%d bytes", written, totalSize);
+        if (display_cb) display_cb("OTA: Download incomplete");
+        sync_service_resume();
+        return;
+    }
+
+    if (!Update.end(true)) {
+        devlog_printf("[OTA] Update finalize failed");
+        if (display_cb) display_cb("OTA: Finalize failed");
+        sync_service_resume();
+        return;
+    }
+
+    // Success!
+    save_version(remote_version);
+    devlog_printf("[OTA] Update successful! New version: %s", remote_version.c_str());
+    home_screen_set_version(remote_version.c_str());
+    if (display_cb) display_cb("Update success. Rebooting...");
+    delay(2000);
+    ESP.restart();
 }
 
 #endif  /* ENABLE_OTA_UPDATES */

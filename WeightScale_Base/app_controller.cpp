@@ -5,6 +5,7 @@
 #include <math.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <Preferences.h>
 
 /* ========================================================
    SERVICE INCLUDES - Conditionally compiled based on app_config.h
@@ -50,6 +51,11 @@ static ui_device_name_cb_t g_device_name_cb = NULL;
 
 static bool g_initialized = false;
 static float g_last_weight = 0.0f;
+static bool g_wifi_safe = true;       // false when crash loop detected
+static bool g_crash_counter_cleared = false;
+
+/* ===== MANUAL WEIGHT OFFSET ===== */
+static float g_manual_offset = 0.0f;   // +/- kg added to non-zero readings
 
 /* ===== TEST MODE ===== */
 static bool g_test_mode = false;
@@ -82,6 +88,22 @@ void app_controller_init(void)
 
     devlog_printf("[CTRL] ✓ Initializing app controller");
 
+    /* ===== CRASH LOOP PROTECTION ===== */
+    {
+        Preferences boot_prefs;
+        boot_prefs.begin("boot", false);
+        uint8_t crash_count = boot_prefs.getUChar("crashes", 0);
+        crash_count++;
+        boot_prefs.putUChar("crashes", crash_count);
+        boot_prefs.end();
+        devlog_printf("[CTRL] Boot crash counter: %d", crash_count);
+        if (crash_count > 3) {
+            g_wifi_safe = false;
+            devlog_printf("[CTRL] ⚠ Crash loop detected (%d crashes). WiFi DISABLED.", crash_count);
+            devlog_printf("[CTRL] Power-cycle the device to re-enable WiFi.");
+        }
+    }
+
     // Always init these services
     storage_service_init();     // Must be first — other services load from NVS
     scale_service_init();
@@ -103,39 +125,56 @@ void app_controller_init(void)
     invoice_service_init();
     devlog_printf("[CTRL] \u2713 Invoice service initialized (invoice #%lu)",
                   invoice_service_current_id());
-
+    /* Load manual weight offset */
+    g_manual_offset = storage_load_offset();
+    if (g_manual_offset != 0.0f)
+        devlog_printf("[CTRL] Manual offset loaded: %.2f kg", g_manual_offset);
 #if ENABLE_WIFI_SERVICE
-    devlog_printf("[CTRL] Heap before WiFi: %lu free, %lu largest",
-                  (unsigned long)esp_get_free_heap_size(),
-                  (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    wifi_service_init();
-    devlog_printf("[CTRL] Heap after WiFi: %lu free, %lu largest",
-                  (unsigned long)esp_get_free_heap_size(),
-                  (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    // Register our internal WiFi callback
-    wifi_service_register_state_callback([](wifi_state_t state) {
-        g_wifi_connected = (state == WIFI_CONNECTED);
-        const char *status;
-        if(state == WIFI_CONNECTED)       status = "Online";
-        else if(state == WIFI_CONNECTING) status = "Connecting...";
-        else                              status = "Offline";
-        home_screen_set_sync_status(status);
-        if (g_sync_status_cb) {
-            g_sync_status_cb(status);
-        }
-        devlog_printf("[CTRL] WiFi state: %s", status);
-    });
-    devlog_printf("[CTRL] ✓ WiFi service initialized");
+    if (g_wifi_safe) {
+        devlog_printf("[CTRL] Heap before WiFi: %lu free, %lu largest",
+                      (unsigned long)esp_get_free_heap_size(),
+                      (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        wifi_service_init();
+        devlog_printf("[CTRL] Heap after WiFi: %lu free, %lu largest",
+                      (unsigned long)esp_get_free_heap_size(),
+                      (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        // Register our internal WiFi callback
+        wifi_service_register_state_callback([](wifi_state_t state) {
+            g_wifi_connected = (state == WIFI_CONNECTED);
+            const char *status;
+            if(state == WIFI_CONNECTED)       status = "Online";
+            else if(state == WIFI_CONNECTING) status = "Connecting...";
+            else                              status = "Offline";
+            home_screen_set_sync_status(status);
+            if (g_sync_status_cb) {
+                g_sync_status_cb(status);
+            }
+            devlog_printf("[CTRL] WiFi state: %s", status);
+        });
+        devlog_printf("[CTRL] ✓ WiFi service initialized");
+    } else {
+        devlog_printf("[CTRL] ⊘ WiFi skipped (crash loop protection)");
+        home_screen_set_sync_status("Safe Mode");
+    }
 #else
     devlog_printf("[CTRL] ⊘ WiFi service DISABLED (app_config.h)");
 #endif
 
+#if ENABLE_OTA_UPDATES
+    if (g_wifi_safe) {
+        ota_service_init();
+        devlog_printf("[CTRL] \u2713 OTA service initialized");
+    }
+#endif
+
 #if ENABLE_CLOUD_SYNC
-    devlog_printf("[CTRL] Heap before Sync init: %lu free, %lu internal",
-                  (unsigned long)esp_get_free_heap_size(),
-                  (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    sync_service_init();
-    devlog_printf("[CTRL] ✓ Sync service initialized");
+    if (g_wifi_safe) {
+        devlog_printf("[CTRL] Heap before Sync init: %lu free, %lu internal",
+                      (unsigned long)esp_get_free_heap_size(),
+                      (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        sync_service_init();
+        devlog_printf("[CTRL] \u2713 Sync service initialized");
+    }
 #endif
 
     /* Load device name from NVS and display on home screen */
@@ -159,69 +198,40 @@ void app_controller_loop(void)
 {
     if (!g_initialized) return;
 
+    /* Clear crash counter after 30s of stable running */
+    if (!g_crash_counter_cleared && millis() > 30000) {
+        g_crash_counter_cleared = true;
+        Preferences boot_prefs;
+        boot_prefs.begin("boot", false);
+        boot_prefs.putUChar("crashes", 0);
+        boot_prefs.end();
+        devlog_printf("[CTRL] Crash counter cleared (stable boot)");
+    }
+
 #if ENABLE_WIFI_SERVICE
-    wifi_service_loop();
+    if (g_wifi_safe) wifi_service_loop();
 #endif
 
 #if ENABLE_CLOUD_SYNC
-    sync_service_loop();
+    if (g_wifi_safe) sync_service_loop();
 #endif
 
-    /* ===== WEIGHT SENSOR → STABILITY → CAPTURE FLOW ===== */
-    float w;
-    if (g_test_mode) {
-        /* Cycle: 0-1s = zero (item removed), 1-6s = stable random weight */
-        unsigned long elapsed = millis() - g_test_weight_ms;
-        if (elapsed >= 6000) {
-            /* New cycle: brief zero phase then stable weight */
-            g_test_weight_ms = millis();
-            g_test_weight_val = 0.0f;
-            w = 0.0f;
-            g_last_weight = -1.0f;
-        } else if (elapsed >= 1000 && g_test_weight_val < 0.01f) {
-            /* Generate a new random weight and hold it stable */
-            g_test_weight_val = (float)(esp_random() % 49901 + 100) / 1000.0f;
-            w = g_test_weight_val;
-            g_last_weight = -1.0f;
-        } else {
-            w = (g_test_weight_val > 0.01f) ? g_test_weight_val : 0.0f;
-        }
-    } else {
-        w = scale_service_get_weight();
+    // ===== AUTO ADD ITEM LOGIC =====
+    float w = scale_service_get_weight();
+    if (w > 0.001f && g_manual_offset != 0.0f) {
+        w += g_manual_offset;
+        if (w < 0.0f) w = 0.0f;
     }
-
-    /* Always update UI with live weight */
     if (w != g_last_weight) {
         g_last_weight = w;
-        if (g_weight_update_cb) {
-            g_weight_update_cb(w);
-        }
+        if (g_weight_update_cb) g_weight_update_cb(w);
     }
 
-    /* Stability detection: weight must hold ±0.5 kg for 2 seconds.
-       After capture, weight must drop below 0.5 kg before next capture
-       is allowed (prevents repeated captures of the same load).
-       Disabled in test mode — user uses SAVE button instead.          */
-    if (!g_test_mode && fabs(w - g_stable_weight) < 0.5f)
-    {
-        if (!g_weight_captured && w >= 1.0f && (millis() - g_stable_start > 2000))
-        {
-            invoice_session_add_weight_entry(w);
-            app_controller_notify_invoice_update();
-
-            Serial.printf("[FLOW] Captured weight %.2f\n", w);
-
-            g_weight_captured = true;  /* prevent duplicate capture */
-        }
-    }
-    else if (!g_test_mode)
-    {
-        g_stable_weight = w;
-        g_stable_start  = millis();
-        /* Only allow next capture after weight drops near zero (item removed) */
-        if (g_weight_captured && w < 0.5f) {
-            g_weight_captured = false;
-        }
+    float stable_weight = 0.0f;
+    if (scale_service_should_add_item(&stable_weight)) {
+        invoice_session_add_weight_entry(stable_weight);
+        app_controller_notify_invoice_update();
+        Serial.printf("[FLOW] Auto-added item: %.2f kg\n", stable_weight);
     }
 }
 
@@ -763,7 +773,7 @@ void app_controller_handle_ui_event(int event_id)
                 devlog_printf("[CTRL] Added weight %.2f kg, qty %d",
                               g_last_weight, invoice_session_get_selected_qty());
             } else {
-                devlog_printf("[CTRL] Weight too low to save (%.3f)", g_last_weight);
+                devlog_printf("[CTRL] Weight too low to save (%.2f)", g_last_weight);
             }
             app_controller_notify_invoice_update();
             break;
@@ -918,4 +928,16 @@ void app_controller_set_test_mode(bool on)
 bool app_controller_is_test_mode(void)
 {
     return g_test_mode;
+}
+
+void app_controller_set_manual_offset(float offset_kg)
+{
+    g_manual_offset = offset_kg;
+    storage_save_offset(offset_kg);
+    devlog_printf("[CTRL] Manual offset set to %.2f kg", offset_kg);
+}
+
+float app_controller_get_manual_offset(void)
+{
+    return g_manual_offset;
 }

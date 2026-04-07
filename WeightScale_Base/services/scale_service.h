@@ -1,3 +1,5 @@
+// Returns true if an item should be added (auto-add logic)
+bool scale_service_should_add_item(float *weight_out);
 #pragma once
 
 #include "../scale_service_v2.h"

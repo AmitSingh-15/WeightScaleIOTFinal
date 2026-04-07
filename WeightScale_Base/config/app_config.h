@@ -23,7 +23,7 @@
 
 // Feature flags - all enabled for full functionality
 #define ENABLE_WIFI_SERVICE 1
-#define ENABLE_OTA_UPDATES 0
+#define ENABLE_OTA_UPDATES 1
 #define ENABLE_CLOUD_SYNC 1
 #define ENABLE_TOUCH_INPUT 1
 #define ENABLE_HX711_SCALE 1

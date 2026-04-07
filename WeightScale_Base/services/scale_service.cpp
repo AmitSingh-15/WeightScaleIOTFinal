@@ -1,3 +1,30 @@
+#include <string.h>
+
+typedef enum {
+    SCALE_STATE_IDLE = 0,
+    SCALE_STATE_MEASURING,
+    SCALE_STATE_STABLE,
+    SCALE_STATE_WAIT_FOR_REMOVE
+} scale_state_t;
+
+static scale_state_t g_scale_state = SCALE_STATE_IDLE;
+static float g_last_stable_weight = 0.0f;
+static uint32_t g_stable_time = 0;
+static bool g_duplicate_guard = false;
+
+// Thread-safe API for controller
+bool scale_service_should_add_item(float *weight_out) {
+    bool should_add = false;
+    if (scale_mutex && xSemaphoreTake(scale_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (g_scale_state == SCALE_STATE_WAIT_FOR_REMOVE && !g_duplicate_guard) {
+            should_add = true;
+            if (weight_out) *weight_out = g_last_stable_weight;
+            g_duplicate_guard = true;
+        }
+        xSemaphoreGive(scale_mutex);
+    }
+    return should_add;
+}
 #include "services/scale_service.h"
 #include "config/app_config.h"
 #include <HX711.h>
@@ -44,9 +71,7 @@ static void scale_task(void *p)
         if (scale.is_ready())
         {
             float sample = scale.get_units(1);
-            if (sample < 0.0f) {
-                sample = 0.0f;
-            }
+            if (sample < 0.0f) sample = 0.0f;
 
             samples[index++] = sample;
             if (index >= SAMPLE_COUNT) {
@@ -59,6 +84,9 @@ static void scale_task(void *p)
                 float sum = 0;
                 for (int i = 0; i < SAMPLE_COUNT; i++) sum += samples[i];
                 float avg = sum / SAMPLE_COUNT;
+
+                // Noise filtering: ignore <5g
+                if (avg < 0.005f) avg = 0.0f;
 
                 if (fabs(avg - last_valid) <= activeProfile.hold_threshold || last_valid == 0.0f)
                 {
@@ -76,25 +104,46 @@ static void scale_task(void *p)
                 }
 
                 uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
-                if (fabs(local_filtered - stable_value) <= activeProfile.hold_threshold)
-                {
-                    if (stable_start_ts == 0)
-                        stable_start_ts = now;
 
-                    if ((now - stable_start_ts) >= activeProfile.hold_time_ms)
-                    {
-                        hold_state = true;
+                // --- STATE MACHINE ---
+                switch (g_scale_state) {
+                case SCALE_STATE_IDLE:
+                    if (local_filtered > 0.01f) {
+                        g_scale_state = SCALE_STATE_MEASURING;
+                        g_stable_time = now;
                     }
+                    break;
+                case SCALE_STATE_MEASURING:
+                    if (fabs(local_filtered - stable_value) <= activeProfile.hold_threshold) {
+                        if (stable_start_ts == 0) stable_start_ts = now;
+                        if ((now - stable_start_ts) >= activeProfile.hold_time_ms) {
+                            g_scale_state = SCALE_STATE_STABLE;
+                            g_last_stable_weight = local_filtered;
+                            g_stable_time = now;
+                        }
+                    } else {
+                        stable_value = local_filtered;
+                        stable_start_ts = now;
+                    }
+                    break;
+                case SCALE_STATE_STABLE:
+                    // Immediately transition to WAIT_FOR_REMOVE
+                    g_scale_state = SCALE_STATE_WAIT_FOR_REMOVE;
+                    g_duplicate_guard = false;
+                    break;
+                case SCALE_STATE_WAIT_FOR_REMOVE:
+                    if (local_filtered < 0.005f) {
+                        g_scale_state = SCALE_STATE_IDLE;
+                        stable_value = 0.0f;
+                        stable_start_ts = 0;
+                    }
+                    break;
                 }
-                else
-                {
-                    stable_value = local_filtered;
-                    stable_start_ts = now;
-                    hold_state = false;
-                }
+
+                // Update hold_state for UI
+                hold_state = (g_scale_state == SCALE_STATE_STABLE || g_scale_state == SCALE_STATE_WAIT_FOR_REMOVE);
             }
         }
-
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

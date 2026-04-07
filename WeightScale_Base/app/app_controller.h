@@ -131,6 +131,10 @@ bool app_controller_is_sync_enabled(void);
 void app_controller_set_test_mode(bool on);
 bool app_controller_is_test_mode(void);
 
+/* Manual weight offset: +/- kg applied to non-zero readings */
+void app_controller_set_manual_offset(float offset_kg);
+float app_controller_get_manual_offset(void);
+
 #ifdef __cplusplus
 }
 #endif

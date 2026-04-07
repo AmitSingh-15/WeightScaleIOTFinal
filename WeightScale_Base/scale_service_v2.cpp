@@ -61,7 +61,7 @@ static void scale_task(void *p)
         {
             /* ===== READ RAW WEIGHT ===== */
             float w = scale.get_units(1);
-            if (w < 0.001) w = 0.000;
+            if (w < 0.01) w = 0.00;
 
             /* ===== STORE IN ROLLING BUFFER ===== */
             samples[index++] = w;
@@ -247,4 +247,37 @@ void scale_service_set_cal_profile(const cal_profile_t *cp)
 const cal_profile_t* scale_service_get_cal_profile(void)
 {
     return &activeCal;
+}
+
+bool scale_service_should_add_item(float *stable_weight)
+{
+    static float last_weight = 0.0f;
+    static unsigned long stable_start = 0;
+    static bool captured = false;
+
+    float w = scale_service_get_weight();
+
+    if(fabs(w - last_weight) < 0.02f)   // stability threshold
+    {
+        if(stable_start == 0)
+            stable_start = millis();
+
+        if(!captured && (millis() - stable_start > 600))
+        {
+            if(w > 0.05f)
+            {
+                *stable_weight = w;
+                captured = true;
+                return true;
+            }
+        }
+    }
+    else
+    {
+        stable_start = 0;
+        captured = false;
+    }
+
+    last_weight = w;
+    return false;
 }

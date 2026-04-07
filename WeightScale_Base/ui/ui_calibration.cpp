@@ -45,7 +45,7 @@ void ui_calibration_init(void (*event_cb)(int evt))
     lv_obj_set_style_text_font(lbl_profile, &lv_font_montserrat_28, 0);
 
     lbl_weight = lv_label_create(content);
-    lv_label_set_text(lbl_weight, "Weight: 0.000 kg");
+    lv_label_set_text(lbl_weight, "Weight: 0.00 kg");
     lv_obj_set_style_text_font(lbl_weight, &lv_font_montserrat_28, 0);
 
     lbl_raw = lv_label_create(content);
@@ -75,7 +75,7 @@ void ui_calibration_set_live(float weight, long raw)
 {
     if (lbl_weight) {
         char buf[32];
-        snprintf(buf, sizeof(buf), "Weight: %.3f kg", weight);
+        snprintf(buf, sizeof(buf), "Weight: %.2f kg", weight);
         lv_label_set_text(lbl_weight, buf);
     }
 
@@ -88,7 +88,7 @@ void ui_calibration_set_live(float weight, long raw)
     const scale_profile_t *p = scale_service_get_profile();
     if (p && lbl_profile) {
         char buf[64];
-        snprintf(buf, sizeof(buf), "Profile: %s (scale=%.1f, threshold=%.3f)", p->name, p->scale, p->hold_threshold);
+        snprintf(buf, sizeof(buf), "Profile: %s (scale=%.1f, threshold=%.2f)", p->name, p->scale, p->hold_threshold);
         lv_label_set_text(lbl_profile, buf);
     }
 }

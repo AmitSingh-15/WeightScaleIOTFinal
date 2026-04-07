@@ -79,7 +79,7 @@ void calibration_wizard_create(lv_obj_t *parent)
 
     lbl_weight = lv_label_create(live);
     lv_obj_add_style(lbl_weight, &g_styles.value_big, 0);
-    lv_label_set_text(lbl_weight, "0.000 kg");
+    lv_label_set_text(lbl_weight, "0.00 kg");
     lv_obj_align(lbl_weight, LV_ALIGN_LEFT_MID, 20, 0);
 
     lbl_raw = lv_label_create(live);
@@ -167,7 +167,7 @@ void calibration_wizard_set_step(const char *txt)
 void calibration_wizard_set_live(float weight, long raw)
 {
     if(lbl_weight && lv_obj_is_valid(lbl_weight)) {
-        snprintf(g_wiz_buf, sizeof(g_wiz_buf), "%.3f kg", weight);
+        snprintf(g_wiz_buf, sizeof(g_wiz_buf), "%.2f kg", weight);
         lv_label_set_text(lbl_weight, g_wiz_buf);
     }
     if(lbl_raw && lv_obj_is_valid(lbl_raw)) {

@@ -69,7 +69,7 @@ void ui_main_init(void (*event_cb)(int evt))
 
     label_weight = lv_label_create(main);
     lv_obj_set_style_text_font(label_weight, &lv_font_montserrat_28, 0);
-    lv_label_set_text(label_weight, "0.000 kg");
+    lv_label_set_text(label_weight, "0.00 kg");
 
     label_hold = lv_label_create(main);
     lv_obj_set_style_text_font(label_hold, &lv_font_montserrat_20, 0);
@@ -109,7 +109,7 @@ void ui_main_set_weight(float kg, bool hold)
     if (label_weight)
     {
         char buf[32];
-        snprintf(buf, sizeof(buf), "%.3f kg", kg);
+        snprintf(buf, sizeof(buf), "%.2f kg", kg);
         lv_label_set_text(label_weight, buf);
     }
     if (label_hold)

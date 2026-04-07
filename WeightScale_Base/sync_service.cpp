@@ -1,3 +1,13 @@
+#ifndef OTA_MODE_ACTIVE
+#define OTA_MODE_ACTIVE 0
+#endif
+
+#if ENABLE_CLOUD_SYNC && !OTA_MODE_ACTIVE
+    // Only run once every 5 minutes
+    if (now - last_sync_attempt < SYNC_INTERVAL_MS)
+        return;
+    // ...existing sync service code...
+#endif
 #include "app_config.h"  /* Must be first for feature flags */
 
 #if ENABLE_CLOUD_SYNC
@@ -9,6 +19,9 @@
 #include "storage_service.h"
 #include "wifi_service.h"
 #include "devlog.h"
+
+// Forward for deinit
+static HTTPClient *g_active_http = nullptr;
 
 /* =========================================================
    CONFIG
@@ -24,7 +37,10 @@ static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
 
 static unsigned long last_sync_attempt = 0;
 static bool sync_busy = false;
+static bool sync_paused = false;             // paused during OTA
 static unsigned long last_http_done_ms = 0;  // track when HTTPS finished for SDIO cooldown
+
+static bool sync_deinited = false;
 
 /* ========================================================= */
 
@@ -115,8 +131,35 @@ static String build_payload(void)
    MAIN LOOP (5 MINUTE INTERVAL)
 ========================================================= */
 
+void sync_service_pause(void)
+{
+    sync_paused = true;
+    devlog_printf("[SYNC] Paused for OTA");
+}
+
+void sync_service_resume(void)
+{
+    sync_paused = false;
+    devlog_printf("[SYNC] Resumed after OTA");
+}
+
+void sync_service_deinit(void)
+{
+    sync_paused = true;
+    sync_busy = false;
+    sync_deinited = true;
+    if (g_active_http) {
+        g_active_http->end();
+        g_active_http = nullptr;
+        devlog_printf("[SYNC] HTTP forcibly closed for OTA");
+    }
+    devlog_printf("[SYNC] Deinitialized for OTA safe mode");
+}
+
 void sync_service_loop(void)
 {
+    if (sync_paused || sync_deinited) return;
+
     unsigned long now = millis();
 
     // Only run once every 5 minutes
@@ -158,6 +201,8 @@ void sync_service_loop(void)
     HTTPClient http;
     http.setTimeout(10000);
 
+    g_active_http = &http;
+
     /* ================= HEALTH CHECK ================= */
 
     if (!http.begin(client, HEALTH_URL))
@@ -171,6 +216,8 @@ void sync_service_loop(void)
     int healthCode = http.GET();
     String healthResp = http.getString();
     http.end();
+
+    g_active_http = nullptr;
 
     devlog_printf("[SYNC] Health code=%d body=%s",
                   healthCode, healthResp.c_str());
@@ -220,6 +267,8 @@ void sync_service_loop(void)
     int postCode = http.POST(postBody);
     String resp = http.getString();
     http.end();
+
+    g_active_http = nullptr;
 
     devlog_printf("[SYNC] POST code=%d resp=%s",
                   postCode, resp.c_str());

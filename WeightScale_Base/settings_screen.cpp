@@ -705,7 +705,7 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_set_style_bg_opa(dev_log_ta, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(dev_log_ta, ui_theme_muted(), 0);
     lv_obj_set_style_text_font(dev_log_ta, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_border_color(dev_log_ta, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_border_color(dev_log_ta, ui_theme_border(), 0);
 
     /* Show/hide based on dev mode state */
     if(was) {

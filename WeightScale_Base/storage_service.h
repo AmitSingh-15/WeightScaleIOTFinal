@@ -25,6 +25,7 @@ uint8_t storage_get_last_records(invoice_record_t *out, uint8_t max);
 void storage_check_new_day_and_reset(void);
 void storage_clear_all_records(void);
 uint32_t storage_get_pending_count(void);
+void storage_set_pending(uint32_t count);
 void storage_reset_pending(void);
 void storage_save_dev_mode(bool enabled);
 bool storage_load_dev_mode(void);

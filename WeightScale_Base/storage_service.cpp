@@ -122,6 +122,11 @@ uint32_t storage_get_pending_count(void)
     return prefs.getUInt("pending", 0);
 }
 
+void storage_set_pending(uint32_t count)
+{
+    prefs.putUInt("pending", count);
+}
+
 void storage_reset_pending(void)
 {
     prefs.putUInt("pending", 0);

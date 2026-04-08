@@ -26,6 +26,9 @@ static bool hold_state = false;
 
 static TaskHandle_t scaleTaskHandle = NULL;
 
+/* Filter reset flag — set by scale_service_reset_filter(), consumed in scale_task() */
+static volatile bool g_filter_reset_pending = false;
+
 /* Auto-zero state */
 static bool auto_zero_enabled = true;
 static const float AUTO_ZERO_THRESHOLD = 0.05f;   /* kg */
@@ -57,6 +60,16 @@ static void scale_task(void *p)
 
     while (true)
     {
+        /* Handle filter reset request from auto-zero calibration */
+        if(g_filter_reset_pending) {
+            g_filter_reset_pending = false;
+            filtered_weight = 0.0f;
+            last_valid = 0.0f;
+            index = 0;
+            buffer_full = false;
+            memset(samples, 0, sizeof(samples));
+        }
+
         if (scale.is_ready())
         {
             /* ===== READ RAW WEIGHT ===== */
@@ -179,6 +192,11 @@ bool scale_service_is_hold()
 void scale_service_tare()
 {
     scale.tare();
+}
+
+void scale_service_reset_filter(void)
+{
+    g_filter_reset_pending = true;
 }
 
 long scale_service_get_raw()

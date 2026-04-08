@@ -48,4 +48,9 @@ bool scale_service_auto_zero_active(void);
 void scale_service_set_cal_profile(const cal_profile_t *cp);
 const cal_profile_t* scale_service_get_cal_profile(void);
 
+/* Reset the internal EMA filter and rolling average buffer to zero.
+   Call after adjusting the cal profile offset so the display snaps
+   to 0 immediately instead of slowly converging. */
+void scale_service_reset_filter(void);
+
 #endif

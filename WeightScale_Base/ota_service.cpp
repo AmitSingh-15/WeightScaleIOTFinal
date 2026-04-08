@@ -232,6 +232,9 @@ void ota_service_check_and_update(void)
     scale_service_suspend();
     devlog_printf("[OTA] Scale suspended");
 
+    sync_service_deinit();
+    devlog_printf("[OTA] Sync fully deinitialized for OTA");
+
     // Reduce UI load (DO NOT kill LVGL completely)
     // lv_timer_pause_all(); // Not available in LVGL 8.x
     lv_obj_clean(lv_scr_act());
@@ -264,7 +267,7 @@ void ota_service_check_and_update(void)
     // 4KB chunks, no artificial delay — let the TCP stack flow naturally.
     // All other bus-contending services (scale, sync) are suspended.
 
-    #define OTA_CHUNK 4096
+    #define OTA_CHUNK 1024
 
     HTTPClient http2;
     WiFiClientSecure bin_client;
@@ -311,7 +314,12 @@ void ota_service_check_and_update(void)
 
     devlog_printf("[OTA] Starting download (4KB chunks)...");
 
+    int sdio_err_count = 0;
+
     while (written < totalSize) {
+        /* Give SDIO bus breathing room BEFORE each read attempt */
+        vTaskDelay(pdMS_TO_TICKS(5));
+
         int avail = stream->available();
         if (avail <= 0) {
             if (!stream->connected() && written < totalSize) {
@@ -322,7 +330,7 @@ void ota_service_check_and_update(void)
                 devlog_printf("[OTA] Download stalled for 2min, aborting");
                 break;
             }
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(50));  // longer wait when no data — reduce SDIO polling
             continue;
         }
 
@@ -337,9 +345,17 @@ void ota_service_check_and_update(void)
                 break;
             }
             written += len;
-        } else {
-            if (millis() - lastActivity > 120000UL) break;
+            sdio_err_count = 0;
+            /* Yield after flash write — let SDIO bus recover */
             vTaskDelay(pdMS_TO_TICKS(10));
+        } else {
+            sdio_err_count++;
+            if (sdio_err_count > 200) {
+                devlog_printf("[OTA] Too many read failures (%d), aborting", sdio_err_count);
+                break;
+            }
+            if (millis() - lastActivity > 120000UL) break;
+            vTaskDelay(pdMS_TO_TICKS(100));  // back off on read failure
             continue;
         }
 

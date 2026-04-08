@@ -216,33 +216,63 @@ void ui_styles_set_theme(bool light)
 {
     g_light_mode = light;
 
-    lv_color_t bg     = light ? lv_color_hex(0xF1F5F9) : lv_color_hex(0x0F172A);
-    lv_color_t card   = light ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x1E293B);
-    lv_color_t text   = light ? lv_color_hex(0x0F172A) : lv_color_hex(0xFFFFFF);
-    lv_color_t muted  = light ? lv_color_hex(0x64748B) : lv_color_hex(0x94A3B8);
-    lv_color_t border = light ? lv_color_hex(0xCBD5E1) : lv_color_hex(0x334155);
-    lv_color_t accent = light ? lv_color_hex(0x0369A1) : lv_color_hex(0x38BDF8);
+    lv_color_t bg      = light ? lv_color_hex(0xF1F5F9) : lv_color_hex(0x0F172A);
+    lv_color_t card    = light ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x1E293B);
+    lv_color_t text    = light ? lv_color_hex(0x0F172A) : lv_color_hex(0xFFFFFF);
+    lv_color_t muted   = light ? lv_color_hex(0x64748B) : lv_color_hex(0x94A3B8);
+    lv_color_t border  = light ? lv_color_hex(0xCBD5E1) : lv_color_hex(0x334155);
+    lv_color_t accent  = light ? lv_color_hex(0x0369A1) : lv_color_hex(0x38BDF8);
+    lv_color_t surface = light ? lv_color_hex(0xDDE3EA) : lv_color_hex(0x0C1222);
+    lv_color_t weight_color = light ? lv_color_hex(0x0E7490) : lv_color_hex(0x22D3EE);
 
+    /* Screen */
     lv_style_set_bg_color(&g_styles.screen, bg);
     lv_style_set_text_color(&g_styles.screen, text);
 
+    /* Card */
     lv_style_set_bg_color(&g_styles.card, card);
     lv_style_set_text_color(&g_styles.card, text);
     lv_style_set_border_color(&g_styles.card, border);
 
+    /* Typography */
     lv_style_set_text_color(&g_styles.title, accent);
     lv_style_set_text_color(&g_styles.value_big, accent);
+    lv_style_set_text_color(&g_styles.value_huge, weight_color);
     lv_style_set_text_color(&g_styles.value, text);
 
+    /* Buttons — secondary adapts to theme, action buttons stay vivid */
+    lv_style_set_bg_color(&g_styles.btn_secondary,
+        light ? lv_color_hex(0xCBD5E1) : lv_color_hex(0x334155));
+    lv_style_set_bg_grad_color(&g_styles.btn_secondary,
+        light ? lv_color_hex(0xB0BCCD) : lv_color_hex(0x1E293B));
+    lv_style_set_text_color(&g_styles.btn_secondary,
+        light ? lv_color_hex(0x1E293B) : lv_color_hex(0xFFFFFF));
+    lv_style_set_border_color(&g_styles.btn_secondary,
+        light ? lv_color_hex(0x94A3B8) : lv_color_hex(0x475569));
+
+    /* Pressed state */
+    lv_style_set_bg_color(&g_styles.btn_pressed,
+        light ? lv_color_hex(0xB0BCCD) : lv_color_hex(0x0F172A));
+
+    /* Keyboard */
+    lv_style_set_bg_color(&g_styles.kb_bg, surface);
+    lv_style_set_bg_color(&g_styles.kb_btn,
+        light ? lv_color_hex(0xE2E8F0) : lv_color_hex(0x334155));
+    lv_style_set_text_color(&g_styles.kb_btn, text);
+    lv_style_set_border_color(&g_styles.kb_btn, border);
+
+    /* Textarea */
+    lv_style_set_bg_color(&g_styles.ta,
+        light ? lv_color_hex(0xF8FAFC) : lv_color_hex(0x1E293B));
+    lv_style_set_text_color(&g_styles.ta, text);
+    lv_style_set_border_color(&g_styles.ta, border);
+
+    /* List button */
     lv_style_set_bg_color(&g_styles.list_btn, card);
     lv_style_set_text_color(&g_styles.list_btn, text);
     lv_style_set_border_color(&g_styles.list_btn, border);
 
-    lv_style_set_bg_color(&g_styles.ta, light ? lv_color_hex(0xF8FAFC) : lv_color_hex(0x1E293B));
-    lv_style_set_text_color(&g_styles.ta, text);
-    lv_style_set_border_color(&g_styles.ta, border);
-
-    /* Force redraw of everything on screen */
+    /* Force full redraw */
     lv_obj_invalidate(lv_scr_act());
 }
 

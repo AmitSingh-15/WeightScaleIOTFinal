@@ -66,9 +66,9 @@ void history_screen_create(lv_obj_t *parent)
     scroll_cont = lv_obj_create(parent);
     lv_obj_set_size(scroll_cont, DISPLAY_WIDTH - 40, DISPLAY_HEIGHT - 100);
     lv_obj_align(scroll_cont, LV_ALIGN_BOTTOM_MID, 0, -5);
-    lv_obj_set_style_bg_color(scroll_cont, COLOR_CARD, 0);
+    lv_obj_set_style_bg_color(scroll_cont, ui_theme_card(), 0);
     lv_obj_set_style_bg_opa(scroll_cont, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(scroll_cont, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_border_color(scroll_cont, ui_theme_border(), 0);
     lv_obj_set_style_border_width(scroll_cont, 1, 0);
     lv_obj_set_style_radius(scroll_cont, 0, 0);
     lv_obj_set_style_pad_all(scroll_cont, 5, 0);
@@ -91,7 +91,7 @@ static void add_record_row(uint32_t idx, const invoice_record_t *rec)
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, lv_pct(100), 40);
     lv_obj_set_style_bg_color(row,
-        (idx % 2 == 0) ? lv_color_hex(0x1E293B) : lv_color_hex(0x162032), 0);
+        (idx % 2 == 0) ? ui_theme_row_even() : ui_theme_row_odd(), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(row, 4, 0);
     lv_obj_set_style_pad_left(row, 10, 0);
@@ -109,7 +109,7 @@ static void add_record_row(uint32_t idx, const invoice_record_t *rec)
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0xE2E8F0), 0);
+    lv_obj_set_style_text_color(lbl, ui_theme_text(), 0);
     lv_label_set_text(lbl, buf);
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
 }
@@ -148,10 +148,10 @@ void history_screen_refresh(void)
         return;
     }
 
-    /* Cap at 20 most recent to prevent OOM crash */
-    uint32_t start = (total > 20) ? (total - 20) : 0;
+    /* Cap at 15 most recent to prevent OOM crash */
+    uint32_t start = (total > 15) ? (total - 15) : 0;
 
-    /* Show newest first */
+    /* Show newest first — yield to LVGL between rows to prevent UI freeze */
     invoice_record_t rec;
     uint32_t row_idx = 0;
     for(int32_t i = (int32_t)total - 1; i >= (int32_t)start; i--)
@@ -159,6 +159,8 @@ void history_screen_refresh(void)
         if(storage_get_record_by_index((uint32_t)i, &rec))
         {
             add_record_row(row_idx++, &rec);
+            /* Yield every 5 rows so LVGL can render and touch stays responsive */
+            if(row_idx % 5 == 0) lv_task_handler();
         }
     }
     Serial.printf("[HIST] refresh done, showed %lu rows\n", row_idx);

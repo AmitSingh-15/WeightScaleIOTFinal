@@ -343,9 +343,7 @@ static void app_controller_restore_home_screen(void)
    ======================================================== */
 
 static struct {
-    int profile_index;       /* 0=100kg, 1=500kg, 2=600kg */
-    int max_capacity;
-    int step;                /* 0=select profile, 1-3=capture points, 4=done */
+    int step;                /* 0=not started, 1-3=capture points, 4=done */
     float known_weights[3];
     long  raw_values[3];
     float slope;
@@ -353,11 +351,6 @@ static struct {
     bool  result_valid;
     lv_timer_t *live_timer;
 } wiz_state;
-
-/* Known weights for each profile (kg) — 3 points each */
-static const float KNOWN_WEIGHTS_100KG[3] = { 5.0f, 50.0f, 100.0f };
-static const float KNOWN_WEIGHTS_500KG[3] = { 20.0f, 250.0f, 500.0f };
-static const float KNOWN_WEIGHTS_600KG[3] = { 25.0f, 300.0f, 600.0f };
 
 /* Linear regression: slope and offset from 3 points */
 static bool compute_linear_regression(const long raw[3], const float known[3],
@@ -394,13 +387,15 @@ static void wiz_live_update(lv_timer_t *t)
 static void open_calibration_wizard(lv_obj_t *from_scr)
 {
     memset(&wiz_state, 0, sizeof(wiz_state));
-    wiz_state.profile_index = -1;
-    wiz_state.step = 0;
+    wiz_state.step = 1;  /* start at point 1 immediately */
 
-    scale_service_suspend();
+    scale_service_resume();
 
     lv_obj_t *wiz_scr = lv_obj_create(NULL);
     calibration_wizard_create(wiz_scr);
+
+    /* Start live update timer */
+    wiz_state.live_timer = lv_timer_create(wiz_live_update, 200, NULL);
 
     calibration_wizard_register_callback([](int evt) {
         switch(evt) {
@@ -412,73 +407,38 @@ static void open_calibration_wizard(lv_obj_t *from_scr)
                 app_controller_restore_home_screen();
                 break;
 
-            case WIZ_EVT_PROFILE_100KG:
-                wiz_state.profile_index = 0;
-                wiz_state.max_capacity = 100;
-                memcpy(wiz_state.known_weights, KNOWN_WEIGHTS_100KG, sizeof(KNOWN_WEIGHTS_100KG));
-                wiz_state.step = 1;
-                scale_service_resume();
-                calibration_wizard_set_step("Place 5.0 kg on scale, then CAPTURE");
-                calibration_wizard_set_status("Profile: 100 KG selected", 0x22C55E);
-                if(!wiz_state.live_timer)
-                    wiz_state.live_timer = lv_timer_create(wiz_live_update, 200, NULL);
-                break;
-
-            case WIZ_EVT_PROFILE_500KG:
-                wiz_state.profile_index = 1;
-                wiz_state.max_capacity = 500;
-                memcpy(wiz_state.known_weights, KNOWN_WEIGHTS_500KG, sizeof(KNOWN_WEIGHTS_500KG));
-                wiz_state.step = 1;
-                scale_service_resume();
-                calibration_wizard_set_step("Place 20.0 kg on scale, then CAPTURE");
-                calibration_wizard_set_status("Profile: 500 KG selected", 0x22C55E);
-                if(!wiz_state.live_timer)
-                    wiz_state.live_timer = lv_timer_create(wiz_live_update, 200, NULL);
-                break;
-
-            case WIZ_EVT_PROFILE_600KG:
-                wiz_state.profile_index = 2;
-                wiz_state.max_capacity = 600;
-                memcpy(wiz_state.known_weights, KNOWN_WEIGHTS_600KG, sizeof(KNOWN_WEIGHTS_600KG));
-                wiz_state.step = 1;
-                scale_service_resume();
-                calibration_wizard_set_step("Place 25.0 kg on scale, then CAPTURE");
-                calibration_wizard_set_status("Profile: 600 KG selected", 0x22C55E);
-                if(!wiz_state.live_timer)
-                    wiz_state.live_timer = lv_timer_create(wiz_live_update, 200, NULL);
-                break;
-
             case WIZ_EVT_NEXT: {
                 if(wiz_state.step < 1 || wiz_state.step > 3) {
-                    calibration_wizard_set_status("Select a profile first!", 0xEF4444);
+                    calibration_wizard_set_status("Calibration already complete!", 0xEF4444);
+                    break;
+                }
+
+                /* Read user-entered weight from numeric keypad */
+                float entered = calibration_wizard_get_entered_weight();
+                if(entered <= 0.0f) {
+                    calibration_wizard_set_status("Enter a valid weight (> 0) !", 0xEF4444);
                     break;
                 }
 
                 int idx = wiz_state.step - 1;
-                float min_weight = wiz_state.max_capacity * 0.01f;
-                float required = wiz_state.known_weights[idx];
+                wiz_state.known_weights[idx] = entered;
 
                 /* Capture raw reading (averaged) */
-                long raw = scale_service_get_raw_avg(20);  /* 20 samples */
+                long raw = scale_service_get_raw_avg(20);
                 wiz_state.raw_values[idx] = raw;
-
-                /* Validate: known weight must be > 1% capacity */
-                if(required < min_weight) {
-                    calibration_wizard_set_status("Weight too low for this profile!", 0xEF4444);
-                    break;
-                }
 
                 char msg[64];
                 snprintf(msg, sizeof(msg), "Point %d captured: raw=%ld for %.1f kg",
-                         wiz_state.step, raw, required);
+                         wiz_state.step, raw, entered);
                 calibration_wizard_set_status(msg, 0x22C55E);
                 devlog_printf("[CAL] %s", msg);
 
+                calibration_wizard_clear_input();
                 wiz_state.step++;
 
                 if(wiz_state.step <= 3) {
-                    snprintf(msg, sizeof(msg), "Place %.1f kg on scale, then CAPTURE",
-                             wiz_state.known_weights[wiz_state.step - 1]);
+                    snprintf(msg, sizeof(msg), "Step %d: Enter weight %d (kg) and CAPTURE",
+                             wiz_state.step, wiz_state.step);
                     calibration_wizard_set_step(msg);
                 } else {
                     /* All 3 points captured — compute regression */
@@ -510,29 +470,38 @@ static void open_calibration_wizard(lv_obj_t *from_scr)
             }
 
             case WIZ_EVT_SAVE: {
-                if(!wiz_state.result_valid || wiz_state.profile_index < 0) {
+                if(!wiz_state.result_valid) {
                     calibration_wizard_set_status("No valid calibration to save!", 0xEF4444);
                     break;
                 }
 
+                /* Determine max capacity from the largest entered weight */
+                float max_w = wiz_state.known_weights[0];
+                for(int i = 1; i < 3; i++) {
+                    if(wiz_state.known_weights[i] > max_w)
+                        max_w = wiz_state.known_weights[i];
+                }
+                int max_cap = (int)(max_w + 0.5f);
+
                 /* Build calibration profile */
                 cal_profile_t cp;
                 memset(&cp, 0, sizeof(cp));
-                snprintf(cp.name, sizeof(cp.name), "%dKG", wiz_state.max_capacity);
-                cp.max_capacity = wiz_state.max_capacity;
+                snprintf(cp.name, sizeof(cp.name), "%dKG", max_cap);
+                cp.max_capacity = max_cap;
                 cp.slope = wiz_state.slope;
                 cp.offset = wiz_state.offset;
                 cp.valid = true;
 
-                /* Save to NVS */
-                storage_save_cal_profile(wiz_state.profile_index, &cp);
-                storage_save_active_cal_index(wiz_state.profile_index);
+                /* Save to NVS as profile 0 (custom) */
+                storage_save_cal_profile(0, &cp);
+                storage_save_active_cal_index(0);
 
                 /* Apply immediately */
                 scale_service_set_cal_profile(&cp);
 
                 calibration_wizard_set_status("Calibration saved! Returning...", 0x22C55E);
-                devlog_printf("[CAL] Profile %d saved: %s", wiz_state.profile_index, cp.name);
+                devlog_printf("[CAL] Custom profile saved: %s (slope=%.6f offset=%.2f)",
+                              cp.name, cp.slope, cp.offset);
 
                 /* Return after brief delay */
                 if(wiz_state.live_timer) {
@@ -572,16 +541,16 @@ static void settings_password_popup_show(void)
     lv_obj_t *card = lv_obj_create(overlay);
     lv_obj_set_size(card, 500, 420);
     lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x1E293B), 0);
+    lv_obj_set_style_bg_color(card, ui_theme_card(), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x334155), 0);
+    lv_obj_set_style_border_color(card, ui_theme_border(), 0);
     lv_obj_set_style_border_width(card, 2, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(card);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0x38BDF8), 0);
+    lv_obj_set_style_text_color(title, ui_theme_accent(), 0);
     lv_label_set_text(title, LV_SYMBOL_SETTINGS "  Enter Password");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
@@ -593,10 +562,10 @@ static void settings_password_popup_show(void)
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_placeholder_text(ta, "Password");
     lv_obj_set_style_text_font(ta, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_bg_color(ta, lv_color_hex(0x0C1222), 0);
+    lv_obj_set_style_bg_color(ta, ui_theme_surface(), 0);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(ta, lv_color_white(), 0);
-    lv_obj_set_style_border_color(ta, lv_color_hex(0x38BDF8), 0);
+    lv_obj_set_style_text_color(ta, ui_theme_text(), 0);
+    lv_obj_set_style_border_color(ta, ui_theme_accent(), 0);
     lv_obj_set_style_pad_all(ta, 10, 0);
 
     lv_obj_t *err_lbl = lv_label_create(card);
@@ -779,11 +748,33 @@ void app_controller_handle_ui_event(int event_id)
             break;
 
         case UI_EVT_CALIBRATE:
+        {
             devlog_printf("[CTRL] → Auto-zero calibration (home)");
-            scale_service_tare();
+            const cal_profile_t *cp = scale_service_get_cal_profile();
+            if(cp && cp->valid) {
+                /* Shift the offset so the current displayed weight maps to 0.
+                   Formula: new_offset = old_offset - current_weight
+                   Proof: slope * raw + new_offset
+                        = (slope * raw + old_offset) - current_weight
+                        = current_weight - current_weight = 0             */
+                float current_w = scale_service_get_weight();
+                cal_profile_t updated = *cp;
+                updated.offset = cp->offset - current_w;
+                scale_service_set_cal_profile(&updated);
+                /* Persist the updated offset so it survives reboot */
+                int idx = storage_load_active_cal_index();
+                if(idx >= 0) storage_save_cal_profile(idx, &updated);
+                devlog_printf("[CTRL] Auto-zero: weight=%.3f kg, offset %.4f → %.4f",
+                              current_w, cp->offset, updated.offset);
+            } else {
+                /* No calibration profile active — fall back to hardware tare */
+                scale_service_tare();
+                devlog_printf("[CTRL] Auto-zero: hardware tare (no cal profile)");
+            }
+            /* Flush the 16-sample rolling buffer so display snaps to 0 */
+            scale_service_reset_filter();
             home_screen_set_weight(0.0f);
-            /* Visual feedback — show "ZERO SET" briefly on sync label */
-            home_screen_set_sync_status("\xEF\x80\x8C ZERO SET!");  /* LV_SYMBOL_OK */
+            home_screen_set_sync_status("\xEF\x80\x8C ZERO SET!");
             lv_timer_create([](lv_timer_t *t) {
                 lv_timer_del(t);
 #if ENABLE_WIFI_SERVICE
@@ -792,8 +783,8 @@ void app_controller_handle_ui_event(int event_id)
                 home_screen_set_sync_status("Offline");
 #endif
             }, 2000, NULL);
-            devlog_printf("[CTRL] Tare applied (auto-zero from home)");
             break;
+        }
 
         case UI_EVT_SAVE:
             devlog_printf("[CTRL] → Save weight item");

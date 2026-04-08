@@ -24,13 +24,13 @@ static const char *HEALTH_URL =
 static const char *BULK_URL =
 "https://dev.etranscargo.in/weightscale/api/WeightIngestion/bulk";
 
-static const unsigned long SYNC_INTERVAL_MS = 20000; // 20 seconds
+static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
 static const unsigned long HTTPS_STARTUP_COOLDOWN_MS = 10000;
 
 static unsigned long last_sync_attempt = 0;
 static bool sync_busy = false;
-static bool sync_paused = false;             // paused during OTA
-static unsigned long last_http_done_ms = 0;  // track when HTTPS finished for SDIO cooldown
+static bool sync_paused = false;
+static unsigned long last_http_done_ms = 0;
 
 static bool sync_deinited = false;
 
@@ -75,15 +75,17 @@ static String escape_json(const String &input)
 }
 
 /* =========================================================
-   BUILD PAYLOAD
+   NEW: TRACK CURRENT INVOICE
 ========================================================= */
 
-/* Tracks which invoice_id was synced and the indices of its records */
 static uint32_t g_syncing_invoice_id = 0;
 static uint32_t g_syncing_indices[64];
 static uint32_t g_syncing_count = 0;
 
-/* Collect all unsynced line items for the first unsynced invoice, build payload */
+/* =========================================================
+   BUILD PAYLOAD (FIXED)
+========================================================= */
+
 static String build_payload(void)
 {
     uint32_t count = storage_get_record_count();
@@ -95,36 +97,42 @@ static String build_payload(void)
     uint32_t devId = storage_load_device_id();
 
     String safeName = escape_json(String(devname));
-    String safeDevId = escape_json(String(devId));
 
-    /* Find first unsynced invoice_id */
     g_syncing_count = 0;
     g_syncing_invoice_id = 0;
-    bool found = false;
 
+    // 👉 pick first unsynced invoice
     for (uint32_t i = 0; i < count; i++)
     {
         invoice_record_t rec;
         if (!storage_get_record_by_index(i, &rec)) continue;
         if (rec.synced) continue;
 
-        if (!found) {
-            g_syncing_invoice_id = rec.invoice_id;
-            found = true;
-        }
+        g_syncing_invoice_id = rec.invoice_id;
+        break;
+    }
 
-        /* Collect all line items for this same invoice */
-        if (rec.invoice_id == g_syncing_invoice_id && g_syncing_count < 64) {
-            g_syncing_indices[g_syncing_count++] = i;
+    if (g_syncing_invoice_id == 0)
+        return "";
+
+    // 👉 collect records for that invoice
+    for (uint32_t i = 0; i < count; i++)
+    {
+        invoice_record_t rec;
+        if (!storage_get_record_by_index(i, &rec)) continue;
+
+        if (!rec.synced && rec.invoice_id == g_syncing_invoice_id)
+        {
+            if (g_syncing_count < 64)
+                g_syncing_indices[g_syncing_count++] = i;
         }
     }
 
-    if (!found || g_syncing_count == 0)
+    if (g_syncing_count == 0)
         return "";
 
-    /* Build payload: one object with all weights in the array */
     uint32_t total_qty = 0;
-    String weightsArr = "";
+    String weightsArr = "[";
 
     for (uint32_t j = 0; j < g_syncing_count; j++)
     {
@@ -132,16 +140,19 @@ static String build_payload(void)
         if (!storage_get_record_by_index(g_syncing_indices[j], &rec)) continue;
 
         total_qty += rec.quantity;
+
         if (j > 0) weightsArr += ",";
         weightsArr += String(rec.total_weight, 3);
     }
 
+    weightsArr += "]";
+
     String s = "{";
     s += "\"invoiceId\":" + String(g_syncing_invoice_id) + ",";
-    s += "\"deviceId\":\"" + safeDevId + "\",";
+    s += "\"deviceId\":\"" + String(devId) + "\",";
     s += "\"quantity\":" + String(total_qty) + ",";
     s += "\"deviceName\":\"" + safeName + "\",";
-    s += "\"weightsInKg\":[" + weightsArr + "]";
+    s += "\"weightsInKg\":" + weightsArr;
     s += "}";
 
     return s;
@@ -185,7 +196,6 @@ void sync_service_loop(void)
 
     unsigned long now = millis();
 
-    // Only run once every configured interval
     if (now - last_sync_attempt < SYNC_INTERVAL_MS)
         return;
 
@@ -204,12 +214,10 @@ void sync_service_loop(void)
         return;
     }
 
-    /* Don't do HTTPS while WiFi scan/connect is in progress — 
-       TLS traffic over SDIO bus corrupts scan results on ESP32-P4 */
     if (wifi_service_is_critical())
     {
         devlog_printf("[SYNC] Deferred - WiFi busy (scan/connect)");
-        last_sync_attempt = millis() - SYNC_INTERVAL_MS + 5000; // retry in 5s
+        last_sync_attempt = millis() - SYNC_INTERVAL_MS + 5000;
         return;
     }
 
@@ -222,15 +230,16 @@ void sync_service_loop(void)
     }
 
     uint32_t pending = storage_get_pending_count();
+    uint32_t rec_count = storage_get_record_count();
 
-    if (pending == 0)
+    if (pending == 0 || rec_count == 0)
     {
         devlog_printf("[SYNC] No pending records");
         return;
     }
 
     devlog_printf("[SYNC] Starting upload attempt");
-    sync_busy = true;   // signal WiFi service: SDIO bus is busy with HTTPS
+    sync_busy = true;
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -240,12 +249,10 @@ void sync_service_loop(void)
 
     g_active_http = &http;
 
-    /* ================= HEALTH CHECK ================= */
+    /* HEALTH */
 
     if (!http.begin(client, HEALTH_URL))
     {
-        devlog_printf("[SYNC] Health begin failed");
-        g_active_http = nullptr;
         sync_busy = false;
         last_http_done_ms = millis();
         return;
@@ -257,31 +264,18 @@ void sync_service_loop(void)
 
     g_active_http = nullptr;
 
-    devlog_printf("[SYNC] Health code=%d body=%s",
-                  healthCode, healthResp.c_str());
-
-    if (healthCode < 200 || healthCode >= 300)
+    if (healthCode < 200 || healthCode >= 300 || healthResp.indexOf("Healthy") < 0)
     {
         sync_busy = false;
         last_http_done_ms = millis();
         return;
     }
 
-    healthResp.trim();
-    if (healthResp.indexOf("Healthy") < 0)
-    {
-        devlog_printf("[SYNC] Server not healthy");
-        sync_busy = false;
-        last_http_done_ms = millis();
-        return;
-    }
-
-    /* ================= BUILD JSON ================= */
+    /* BUILD */
 
     String postBody = build_payload();
     if (postBody.length() == 0)
     {
-        devlog_printf("[SYNC] Nothing to upload");
         sync_busy = false;
         last_http_done_ms = millis();
         return;
@@ -289,12 +283,10 @@ void sync_service_loop(void)
 
     devlog_printf("[SYNC] POST JSON: %s", postBody.c_str());
 
-    /* ================= POST ================= */
+    /* POST */
 
     if (!http.begin(client, BULK_URL))
     {
-        devlog_printf("[SYNC] POST begin failed");
-        g_active_http = nullptr;
         sync_busy = false;
         last_http_done_ms = millis();
         return;
@@ -314,39 +306,28 @@ void sync_service_loop(void)
 
     if (postCode >= 200 && postCode < 300)
     {
-        devlog_printf("[SYNC] Upload success (record %ld)", g_syncing_index);
+        devlog_printf("[SYNC] Upload success (invoice %lu)", g_syncing_invoice_id);
 
-        /* Mark only the single synced record */
-        if (g_syncing_index >= 0)
+        // ✅ FIX: mark ONLY current invoice records
+        for (uint32_t i = 0; i < g_syncing_count; i++)
         {
+            uint32_t idx = g_syncing_indices[i];
+
             invoice_record_t rec;
-            if (storage_get_record_by_index((uint32_t)g_syncing_index, &rec))
+            if (storage_get_record_by_index(idx, &rec))
             {
                 rec.synced = 1;
-                storage_update_record((uint32_t)g_syncing_index, &rec);
-            }
-
-            /* Decrement pending count */
-            uint32_t pending = storage_get_pending_count();
-            if (pending > 0)
-            {
-                pending--;
-                if (pending == 0)
-                    storage_reset_pending();
-                else
-                    storage_set_pending(pending);
+                storage_update_record(idx, &rec);
             }
         }
-        g_syncing_index = -1;
     }
     else
     {
         devlog_printf("[SYNC] Upload failed - server rejected");
-        g_syncing_index = -1;
     }
 
     sync_busy = false;
     last_http_done_ms = millis();
-    devlog_printf("[SYNC] HTTP done, SDIO cooldown starts");
 }
-#endif  /* ENABLE_CLOUD_SYNC */
+
+#endif

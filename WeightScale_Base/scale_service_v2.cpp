@@ -23,6 +23,7 @@ static cal_profile_t activeCal = { "NONE", 500, 1.0f, 0.0f, false };
 
 static float filtered_weight = 0;
 static bool hold_state = false;
+static long last_valid_raw = 0;  /* cached raw for glitch-free display */
 
 static TaskHandle_t scaleTaskHandle = NULL;
 
@@ -58,6 +59,8 @@ static void scale_task(void *p)
 
     float last_valid = 0;
 
+    int consecutive_fails = 0;
+
     while (true)
     {
         /* Handle filter reset request from auto-zero calibration */
@@ -65,16 +68,34 @@ static void scale_task(void *p)
             g_filter_reset_pending = false;
             filtered_weight = 0.0f;
             last_valid = 0.0f;
+            last_valid_raw = 0;
             index = 0;
             buffer_full = false;
             memset(samples, 0, sizeof(samples));
+            consecutive_fails = 0;
         }
 
         if (scale.is_ready())
         {
-            /* ===== READ RAW WEIGHT ===== */
-            float w = scale.get_units(1);
-            if (w < 0.01) w = 0.00;
+            /* ===== READ RAW WEIGHT (3-sample average for noise reduction) ===== */
+            float w = scale.get_units(3);
+
+            /* ===== REJECT ZERO-SPIKES =====
+               If we have a valid last reading and this one drops to ~0,
+               it's almost certainly a HX711 glitch — skip it. */
+            if(last_valid > 0.5f && fabs(w) < 0.05f) {
+                consecutive_fails++;
+                if(consecutive_fails < 5) {
+                    /* Ignore this glitch read, keep previous value */
+                    vTaskDelay(pdMS_TO_TICKS(30));
+                    continue;
+                }
+                /* If 5+ consecutive "zeros", accept it as real (weight removed) */
+            }
+            consecutive_fails = 0;
+
+            /* Clamp small negatives to zero */
+            if(w < 0.0f) w = 0.0f;
 
             /* ===== STORE IN ROLLING BUFFER ===== */
             samples[index++] = w;
@@ -88,25 +109,43 @@ static void scale_task(void *p)
             /* ===== ONLY PROCESS WHEN BUFFER READY ===== */
             if(buffer_full)
             {
-                /* ---------- AVERAGE ---------- */
-                float sum = 0;
-                for(int i=0;i<SAMPLE_COUNT;i++)
-                    sum += samples[i];
+                /* ---------- MEDIAN-OF-3 TRIMMED AVERAGE ----------
+                   Sort, discard lowest and highest 2 readings,
+                   average the middle values to reject outliers.    */
+                float sorted[SAMPLE_COUNT];
+                memcpy(sorted, samples, sizeof(samples));
 
-                float avg = sum / SAMPLE_COUNT;
+                /* Simple insertion sort (16 elements) */
+                for(int i = 1; i < SAMPLE_COUNT; i++) {
+                    float key = sorted[i];
+                    int j = i - 1;
+                    while(j >= 0 && sorted[j] > key) {
+                        sorted[j+1] = sorted[j];
+                        j--;
+                    }
+                    sorted[j+1] = key;
+                }
+
+                /* Trim 2 from each end */
+                float sum = 0;
+                const int trim = 2;
+                for(int i = trim; i < SAMPLE_COUNT - trim; i++)
+                    sum += sorted[i];
+                float avg = sum / (SAMPLE_COUNT - 2 * trim);
 
                 /* ---------- Apply calibration profile if valid ---------- */
                 if(activeCal.valid) {
-                    /* weight = slope * raw_units + offset */
                     avg = activeCal.slope * avg + activeCal.offset;
-                    if(avg < 0.001f) avg = 0.0f;
+                    if(avg < 0.01f) avg = 0.0f;
                 }
 
                 /* ---------- SPIKE REJECTION ---------- */
-                if(fabs(avg - last_valid) > activeProfile.hold_threshold)
-                {
+                float diff = fabs(avg - last_valid);
+                if(diff < activeProfile.hold_threshold || diff > 0.3f) {
+                    /* Accept: either within normal jitter, or a real change */
                     last_valid = avg;
                 }
+                /* else: moderate spike — ignore, keep last_valid */
 
                 /* ---------- EMA SMOOTH ---------- */
                 filtered_weight = ema(
@@ -120,12 +159,10 @@ static void scale_task(void *p)
                 {
                     float abs_wt = fabs(filtered_weight);
                     if(abs_wt > 0.5f) {
-                        /* Something is on the scale */
                         auto_zero_was_loaded = true;
                         auto_zero_stable_since = 0;
                     }
                     else if(abs_wt < AUTO_ZERO_THRESHOLD) {
-                        /* Near zero — start/continue stability timer */
                         unsigned long now = millis();
                         if(auto_zero_stable_since == 0)
                             auto_zero_stable_since = now;
@@ -148,8 +185,14 @@ static void scale_task(void *p)
                 }
             }
         }
+        else
+        {
+            /* HX711 not ready — don't spam, just wait */
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
 
-        vTaskDelay(pdMS_TO_TICKS(50));   // faster loop = smoother response
+        vTaskDelay(pdMS_TO_TICKS(40));
     }
 }
 
@@ -201,8 +244,12 @@ void scale_service_reset_filter(void)
 
 long scale_service_get_raw()
 {
-    if (!scale.is_ready()) return 0;
-    return scale.read();
+    if (!scale.is_ready()) return last_valid_raw;
+    long r = scale.read();
+    /* Reject zero-glitch: if we had a valid reading and this is ~0, keep cached */
+    if(last_valid_raw != 0 && r == 0) return last_valid_raw;
+    last_valid_raw = r;
+    return r;
 }
 
 const scale_profile_t* scale_service_get_profile()
@@ -240,18 +287,22 @@ long scale_service_get_raw_avg(int samples)
 {
     if(samples < 1) samples = 1;
     if(samples > 50) samples = 50;
-    if(!scale.is_ready()) return 0;
+    if(!scale.is_ready()) return last_valid_raw;
 
     long total = 0;
     int count = 0;
     for(int i = 0; i < samples; i++) {
         if(scale.is_ready()) {
-            total += scale.read();
+            long r = scale.read();
+            /* Skip zero-glitch reads */
+            if(r == 0 && last_valid_raw != 0) continue;
+            total += r;
             count++;
+            if(r != 0) last_valid_raw = r;
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
-    return count > 0 ? (total / count) : 0;
+    return count > 0 ? (total / count) : last_valid_raw;
 }
 
 void scale_service_set_cal_profile(const cal_profile_t *cp)

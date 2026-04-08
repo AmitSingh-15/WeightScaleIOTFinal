@@ -83,7 +83,7 @@ void history_screen_create(lv_obj_t *parent)
 }
 
 /* Create a single row — simplified to reduce LVGL object count */
-static void add_record_row(uint32_t idx, const invoice_record_t *rec)
+static void add_record_row(uint32_t idx, const invoice_record_t *rec, float inv_total)
 {
     if(!scroll_cont || !lv_obj_is_valid(scroll_cont)) return;
 
@@ -97,14 +97,16 @@ static void add_record_row(uint32_t idx, const invoice_record_t *rec)
     lv_obj_set_style_pad_left(row, 10, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Single label with all info formatted inline */
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%lu.  INV #%lu   %.2f kg  x%d   = %.2f kg   %s",
+    /* Single label: idx | INV# | unit weight x qty = item weight | invoice total | sync */
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "%lu. INV#%lu  %.2fkg x%d = %.2fkg  | Inv: %.2fkg  %s",
              idx + 1,
              rec->invoice_id,
              rec->weight,
              rec->quantity,
              rec->total_weight,
+             inv_total,
              rec->synced ? LV_SYMBOL_OK : LV_SYMBOL_REFRESH);
 
     lv_obj_t *lbl = lv_label_create(row);
@@ -150,20 +152,43 @@ void history_screen_refresh(void)
 
     /* Cap at 15 most recent to prevent OOM crash */
     uint32_t start = (total > 15) ? (total - 15) : 0;
+    uint32_t visible = total - start;
 
-    /* Show newest first — yield to LVGL between rows to prevent UI freeze */
-    invoice_record_t rec;
-    uint32_t row_idx = 0;
-    for(int32_t i = (int32_t)total - 1; i >= (int32_t)start; i--)
+    /* First pass: read visible records and compute per-invoice totals */
+    invoice_record_t recs[15];
+    float inv_totals[15];
+    uint32_t rec_indices[15];
+    uint32_t loaded = 0;
+
+    for(int32_t i = (int32_t)total - 1; i >= (int32_t)start && loaded < 15; i--)
     {
-        if(storage_get_record_by_index((uint32_t)i, &rec))
+        if(storage_get_record_by_index((uint32_t)i, &recs[loaded]))
         {
-            add_record_row(row_idx++, &rec);
-            /* Yield every 5 rows so LVGL can render and touch stays responsive */
-            if(row_idx % 5 == 0) lv_task_handler();
+            rec_indices[loaded] = (uint32_t)i;
+            loaded++;
         }
     }
-    Serial.printf("[HIST] refresh done, showed %lu rows\n", row_idx);
+
+    /* Compute total weight per invoice_id */
+    for(uint32_t i = 0; i < loaded; i++)
+    {
+        float sum = 0.0f;
+        uint32_t inv_id = recs[i].invoice_id;
+        for(uint32_t j = 0; j < loaded; j++)
+        {
+            if(recs[j].invoice_id == inv_id)
+                sum += recs[j].total_weight;
+        }
+        inv_totals[i] = sum;
+    }
+
+    /* Show newest first — yield to LVGL between rows to prevent UI freeze */
+    for(uint32_t i = 0; i < loaded; i++)
+    {
+        add_record_row(i, &recs[i], inv_totals[i]);
+        if((i + 1) % 5 == 0) lv_task_handler();
+    }
+    Serial.printf("[HIST] refresh done, showed %lu rows\n", loaded);
 }
 
 #ifdef __cplusplus

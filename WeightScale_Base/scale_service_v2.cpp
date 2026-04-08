@@ -3,8 +3,8 @@
 #include <math.h>
 #include "devlog.h"
 
-#define HX711_DOUT 27
-#define HX711_SCK  28
+#define HX711_DOUT 48
+#define HX711_SCK  47
 
 static HX711 scale;
 

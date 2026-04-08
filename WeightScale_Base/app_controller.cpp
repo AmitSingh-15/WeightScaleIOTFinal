@@ -63,9 +63,15 @@ static unsigned long g_test_weight_ms = 0;
 static float g_test_weight_val = 0.0f;
 
 /* ===== STABILITY DETECTION STATE ===== */
+typedef enum {
+    WEIGHT_WAIT_FOR_LOAD = 0,
+    WEIGHT_WAIT_FOR_STABLE,
+    WEIGHT_WAIT_FOR_REMOVE
+} weight_flow_state_t;
+
+static weight_flow_state_t g_weight_flow_state = WEIGHT_WAIT_FOR_LOAD;
 static float g_stable_weight = 0.0f;
 static unsigned long g_stable_start = 0;
-static bool g_weight_captured = false;  /* prevents duplicate capture */
 
 /* Forward declaration */
 static void app_controller_notify_invoice_update(void);
@@ -241,21 +247,39 @@ void app_controller_loop(void)
         if (g_weight_update_cb) g_weight_update_cb(w);
     }
 
-    if (fabsf(w - g_stable_weight) >= 0.02f) {
-        g_stable_weight = w;
-        g_stable_start = millis();
-        g_weight_captured = false;
-    } else if (!g_weight_captured && w >= 0.05f && g_stable_start != 0 &&
-               (millis() - g_stable_start) > 600) {
-        invoice_session_add_weight_entry(w);
-        invoice_session_set_selected_qty(1);
-        app_controller_notify_invoice_update();
-        g_weight_captured = true;
-        Serial.printf("[FLOW] Auto-added stable item: %.2f kg\n", w);
-    }
-
     if (w < 0.05f) {
-        g_weight_captured = false;
+        if (g_weight_flow_state != WEIGHT_WAIT_FOR_LOAD) {
+            g_weight_flow_state = WEIGHT_WAIT_FOR_LOAD;
+            g_stable_weight = 0.0f;
+            g_stable_start = 0;
+            devlog_printf("[FLOW] Weight removed, ready for next item");
+        }
+    } else {
+        switch (g_weight_flow_state) {
+            case WEIGHT_WAIT_FOR_LOAD:
+                g_weight_flow_state = WEIGHT_WAIT_FOR_STABLE;
+                g_stable_weight = w;
+                g_stable_start = millis();
+                break;
+
+            case WEIGHT_WAIT_FOR_STABLE:
+                if (fabsf(w - g_stable_weight) >= 0.02f) {
+                    g_stable_weight = w;
+                    g_stable_start = millis();
+                } else if (g_stable_start != 0 &&
+                           (millis() - g_stable_start) > 600) {
+                    invoice_session_add_weight_entry(w);
+                    invoice_session_set_selected_qty(1);
+                    app_controller_notify_invoice_update();
+                    g_weight_flow_state = WEIGHT_WAIT_FOR_REMOVE;
+                    devlog_printf("[FLOW] Auto-added stable item: %.2f kg", w);
+                }
+                break;
+
+            case WEIGHT_WAIT_FOR_REMOVE:
+                /* One item per placement. Ignore further stability until scale returns to zero. */
+                break;
+        }
     }
 }
 
@@ -791,7 +815,9 @@ void app_controller_handle_ui_event(int event_id)
             if (g_last_weight >= 0.05f) {
                 invoice_session_add_weight_entry(g_last_weight);
                 invoice_session_set_selected_qty(1);
-                g_weight_captured = true;  /* prevent duplicate auto-capture */
+                g_weight_flow_state = WEIGHT_WAIT_FOR_REMOVE;
+                g_stable_weight = g_last_weight;
+                g_stable_start = millis();
                 devlog_printf("[CTRL] Added weight %.2f kg, qty %d",
                               g_last_weight, invoice_session_get_selected_qty());
             } else {

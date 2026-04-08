@@ -38,6 +38,8 @@ static const float AUTO_ZERO_THRESHOLD = 0.05f;   /* kg */
 static const unsigned long AUTO_ZERO_STABLE_MS = 2000; /* 2 seconds stable */
 static const unsigned long AUTO_ZERO_COOLDOWN_MS = 10000; /* 10s between zeros */
 static const unsigned long RAW_STABLE_MS = 500; /* raw display/capture settles first */
+static const float FAST_TRACK_STEP_KG = 5.0f; /* big loads should snap quickly */
+static const float MEDIUM_TRACK_STEP_KG = 1.0f;
 static unsigned long auto_zero_stable_since = 0;
 static unsigned long auto_zero_last_tare = 0;
 static bool auto_zero_was_loaded = false;  /* track if weight was on scale recently */
@@ -55,7 +57,7 @@ static void scale_task(void *p)
     scale.set_scale(activeProfile.scale);
     scale.tare();
 
-    const int SAMPLE_COUNT = 16;     // 🔥 industrial averaging window
+    const int SAMPLE_COUNT = 8;      // faster response while keeping trimmed averaging
     float samples[SAMPLE_COUNT];
     long raw_samples[SAMPLE_COUNT];
     int index = 0;
@@ -197,12 +199,19 @@ static void scale_task(void *p)
                 }
                 /* else: moderate spike — ignore, keep last_valid */
 
-                /* ---------- EMA SMOOTH ---------- */
-                filtered_weight = ema(
-                    filtered_weight,
-                    last_valid,
-                    activeProfile.ema_alpha
-                );
+                /* ---------- ADAPTIVE SMOOTH ---------- */
+                float filter_diff = fabsf(last_valid - filtered_weight);
+                if(filter_diff >= FAST_TRACK_STEP_KG) {
+                    filtered_weight = last_valid;
+                } else if(filter_diff >= MEDIUM_TRACK_STEP_KG) {
+                    filtered_weight = ema(filtered_weight, last_valid, 0.70f);
+                } else {
+                    filtered_weight = ema(
+                        filtered_weight,
+                        last_valid,
+                        activeProfile.ema_alpha
+                    );
+                }
 
                 /* ---------- AUTO-ZERO ---------- */
                 if(auto_zero_enabled)

@@ -32,11 +32,14 @@ static const char *PROD_BULK_URL =
 
 static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
 static const unsigned long HTTPS_STARTUP_COOLDOWN_MS = 10000;
+static const unsigned long SYNC_TRANSPORT_COOLDOWN_MS = 60000;
 
 static unsigned long last_sync_attempt = 0;
 static bool sync_busy = false;
 static bool sync_paused = false;
 static unsigned long last_http_done_ms = 0;
+static unsigned long transport_cooldown_until_ms = 0;
+static uint8_t consecutive_transport_failures = 0;
 
 static bool sync_deinited = false;
 static bool g_env_is_prod = false;
@@ -46,6 +49,25 @@ static void finish_sync_attempt(void)
     sync_busy = false;
     last_http_done_ms = millis();
     g_active_http = nullptr;
+}
+
+static void note_transport_success(void)
+{
+    consecutive_transport_failures = 0;
+    transport_cooldown_until_ms = 0;
+}
+
+static void note_transport_failure(const char *stage, int err_code)
+{
+    consecutive_transport_failures++;
+    transport_cooldown_until_ms = millis() + SYNC_TRANSPORT_COOLDOWN_MS;
+    devlog_printf("[SYNC] Transport failure during %s: %d (count=%u)",
+                  stage, err_code, (unsigned)consecutive_transport_failures);
+
+    if (consecutive_transport_failures >= 2) {
+        devlog_printf("[SYNC] Requesting WiFi reconnect after repeated transport failures");
+        wifi_service_request_reconnect();
+    }
 }
 
 static const char *current_health_url(void)
@@ -89,6 +111,8 @@ void sync_service_init(void)
     sync_paused = false;
     sync_deinited = false;
     last_http_done_ms = 0;
+    transport_cooldown_until_ms = 0;
+    consecutive_transport_failures = 0;
     g_env_is_prod = storage_load_env_prod();
     devlog_printf("[SYNC] Init in %s mode", g_env_is_prod ? "PROD" : "DEV");
 }
@@ -211,6 +235,7 @@ void sync_service_resume(void)
     sync_paused = false;
     sync_deinited = false;
     last_sync_attempt = millis();
+    transport_cooldown_until_ms = 0;
     devlog_printf("[SYNC] Resumed after OTA");
 }
 
@@ -224,6 +249,8 @@ void sync_service_deinit(void)
         g_active_http = nullptr;
         devlog_printf("[SYNC] HTTP forcibly closed for OTA");
     }
+    transport_cooldown_until_ms = 0;
+    consecutive_transport_failures = 0;
     last_http_done_ms = millis();
     devlog_printf("[SYNC] Deinitialized for OTA safe mode");
 }
@@ -234,6 +261,10 @@ void sync_service_loop(void)
     if (sync_busy) return;
 
     unsigned long now = millis();
+
+    if (transport_cooldown_until_ms != 0 &&
+        (long)(now - transport_cooldown_until_ms) < 0)
+        return;
 
     if (now - last_sync_attempt < SYNC_INTERVAL_MS)
         return;
@@ -283,9 +314,10 @@ void sync_service_loop(void)
 
     WiFiClientSecure client;
     client.setInsecure();
+    client.setTimeout(5000);
 
     HTTPClient http;
-    http.setTimeout(10000);
+    http.setTimeout(5000);
 
     g_active_http = &http;
 
@@ -293,16 +325,28 @@ void sync_service_loop(void)
 
     if (!http.begin(client, current_health_url()))
     {
+        note_transport_failure("health begin", -1);
         finish_sync_attempt();
         return;
     }
 
     int healthCode = http.GET();
-    String healthResp = http.getString();
+    String healthResp;
+    if (healthCode > 0) {
+        healthResp = http.getString();
+    }
     http.end();
+
+    if (healthCode <= 0)
+    {
+        note_transport_failure("health GET", healthCode);
+        finish_sync_attempt();
+        return;
+    }
 
     if (healthCode < 200 || healthCode >= 300 || healthResp.indexOf("Healthy") < 0)
     {
+        note_transport_success();
         finish_sync_attempt();
         return;
     }
@@ -322,6 +366,7 @@ void sync_service_loop(void)
 
     if (!http.begin(client, current_bulk_url()))
     {
+        note_transport_failure("bulk begin", -1);
         finish_sync_attempt();
         return;
     }
@@ -330,11 +375,23 @@ void sync_service_loop(void)
     http.addHeader("Connection", "close");
 
     int postCode = http.POST(postBody);
-    String resp = http.getString();
+    String resp;
+    if (postCode > 0) {
+        resp = http.getString();
+    }
     http.end();
 
     devlog_printf("[SYNC] POST code=%d resp=%s",
                   postCode, resp.c_str());
+
+    if (postCode <= 0)
+    {
+        note_transport_failure("bulk POST", postCode);
+        finish_sync_attempt();
+        return;
+    }
+
+    note_transport_success();
 
     if (postCode >= 200 && postCode < 300)
     {

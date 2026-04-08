@@ -361,4 +361,26 @@ void wifi_service_disconnect(void)
     scan_requested = false;
 }
 
+void wifi_service_request_reconnect(void)
+{
+    devlog_printf("[WIFI] Reconnect requested");
+    WiFi.disconnect(false, false);
+    connected_since_ms = 0;
+    link_poll_failures = 0;
+    wifi_critical_section = false;
+    connected_ssid[0] = 0;
+    set_state(WIFI_DISCONNECTED);
+    connect_request = false;
+    scan_requested = false;
+
+    if (req_ssid[0] != 0) {
+        auto_connect_pending = true;
+        auto_connect_after_ms = millis() + 2000;
+        devlog_printf("[WIFI] Auto-reconnect scheduled in 2s");
+    } else {
+        auto_connect_pending = false;
+        devlog_printf("[WIFI] Reconnect skipped - no saved SSID");
+    }
+}
+
 #endif

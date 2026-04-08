@@ -28,6 +28,7 @@ String wifi_service_get_ssid(uint8_t index);
 
 void wifi_service_connect(const char *ssid, const char *password);
 void wifi_service_disconnect(void);
+void wifi_service_request_reconnect(void);
 bool wifi_service_is_critical(void);
 unsigned long wifi_service_connected_since_ms(void);
 String wifi_service_get_connected_ssid(void);
@@ -53,6 +54,7 @@ inline uint8_t wifi_service_get_ap_count(void) { return 0; }
 inline String wifi_service_get_ssid(uint8_t index) { return ""; }
 inline void wifi_service_connect(const char *ssid, const char *password) {}
 inline void wifi_service_disconnect(void) {}
+inline void wifi_service_request_reconnect(void) {}
 inline bool wifi_service_is_critical(void) { return false; }
 inline unsigned long wifi_service_connected_since_ms(void) { return 0; }
 inline String wifi_service_get_connected_ssid(void) { return ""; }

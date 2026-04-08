@@ -57,6 +57,12 @@ static bool g_crash_counter_cleared = false;
 /* ===== MANUAL WEIGHT OFFSET ===== */
 static float g_manual_offset = 0.0f;   // +/- kg added to non-zero readings
 
+static float normalize_weight_for_ui_and_items(float weight)
+{
+    if (weight < 0.2f) return 0.0f;
+    return roundf(weight);
+}
+
 /* ===== TEST MODE ===== */
 static bool g_test_mode = false;
 static unsigned long g_test_weight_ms = 0;
@@ -242,6 +248,7 @@ void app_controller_loop(void)
         w += g_manual_offset;
         if (w < 0.0f) w = 0.0f;
     }
+    w = normalize_weight_for_ui_and_items(w);
     if (w != g_last_weight) {
         g_last_weight = w;
         if (g_weight_update_cb) g_weight_update_cb(w);
@@ -837,6 +844,7 @@ void app_controller_handle_ui_event(int event_id)
                 uint8_t item_idx = event_id - UI_EVT_REMOVE_ITEM_BASE;
                 devlog_printf("[CTRL] → Remove invoice item %d", item_idx);
                 invoice_session_remove(item_idx);
+                app_controller_notify_invoice_update();
             }
             break;
     }

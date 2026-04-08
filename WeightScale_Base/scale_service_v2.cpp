@@ -40,9 +40,12 @@ static const unsigned long AUTO_ZERO_COOLDOWN_MS = 10000; /* 10s between zeros *
 static const unsigned long RAW_STABLE_MS = 500; /* raw display/capture settles first */
 static const float FAST_TRACK_STEP_KG = 5.0f; /* big loads should snap quickly */
 static const float MEDIUM_TRACK_STEP_KG = 1.0f;
+static const float RETURN_ZERO_THRESHOLD_KG = 0.20f;
+static const unsigned long RETURN_ZERO_MS = 2000;
 static unsigned long auto_zero_stable_since = 0;
 static unsigned long auto_zero_last_tare = 0;
 static bool auto_zero_was_loaded = false;  /* track if weight was on scale recently */
+static unsigned long return_zero_since = 0;
 
 static float ema(float prev, float input, float alpha)
 {
@@ -77,6 +80,7 @@ static void scale_task(void *p)
             last_valid_raw = 0;
             g_stable_raw_candidate = 0;
             g_stable_raw_since = 0;
+            return_zero_since = 0;
             index = 0;
             buffer_full = false;
             memset(samples, 0, sizeof(samples));
@@ -214,6 +218,18 @@ static void scale_task(void *p)
                 }
 
                 /* ---------- AUTO-ZERO ---------- */
+                if(filtered_weight <= RETURN_ZERO_THRESHOLD_KG) {
+                    if(return_zero_since == 0) {
+                        return_zero_since = now_ms;
+                    } else if((now_ms - return_zero_since) >= RETURN_ZERO_MS) {
+                        filtered_weight = 0.0f;
+                        last_valid = 0.0f;
+                        last_valid_raw = 0;
+                    }
+                } else {
+                    return_zero_since = 0;
+                }
+
                 if(auto_zero_enabled)
                 {
                     float abs_wt = fabs(filtered_weight);
@@ -236,6 +252,7 @@ static void scale_task(void *p)
                             last_valid_raw = 0;
                             g_stable_raw_candidate = 0;
                             g_stable_raw_since = 0;
+                            return_zero_since = 0;
                             auto_zero_last_tare = now;
                             auto_zero_was_loaded = false;
                             auto_zero_stable_since = 0;

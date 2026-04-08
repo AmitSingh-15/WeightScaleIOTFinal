@@ -55,6 +55,10 @@ void storage_save_wifi_credentials(const char *ssid, const char *password);
 bool storage_load_wifi_credentials(char *ssid, size_t ssid_max, char *pwd, size_t pwd_max);
 void storage_forget_wifi_credentials(void);
 
+/* ===== ENVIRONMENT (Dev/Prod) STORAGE ===== */
+void storage_save_env_prod(bool is_prod);
+bool storage_load_env_prod(void);
+
 /* ===== CALIBRATION PROFILE STORAGE ===== */
 void storage_save_cal_profile(int profile_index, const cal_profile_t *cp);
 bool storage_load_cal_profile(int profile_index, cal_profile_t *cp);

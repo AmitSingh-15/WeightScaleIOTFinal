@@ -14,6 +14,7 @@
 #include "storage_service.h"
 #include "device_name_screen.h"
 #include "devlog.h"
+#include "sync_service.h"
 
 extern void wifi_password_popup_show(const char *ssid);
 
@@ -35,6 +36,8 @@ static lv_obj_t *ota_status_label = NULL;
 static lv_obj_t *device_name_label = NULL;
 static lv_obj_t *device_id_label = NULL;
 static lv_obj_t *offset_lbl = NULL;
+static lv_obj_t *env_mode_sw = NULL;
+static lv_obj_t *env_mode_lbl = NULL;
 /* WiFi state change callback */
 static void wifi_state_cb(wifi_state_t s)
 {
@@ -234,6 +237,17 @@ static void clear_logs_cb(lv_event_t *e)
     devlog_printf("[SETTINGS] Logs cleared by user");
 }
 
+#if ENABLE_CLOUD_SYNC
+static void sync_env_changed(lv_event_t *e)
+{
+    bool is_prod = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    sync_service_set_env(is_prod);
+
+    if(env_mode_lbl && lv_obj_is_valid(env_mode_lbl))
+        lv_label_set_text(env_mode_lbl, is_prod ? "Prod API" : "Dev API");
+}
+#endif
+
 /* ================= REGISTRATION ================= */
 
 void settings_screen_register_back_callback(void (*cb)(void))
@@ -264,6 +278,8 @@ void settings_screen_create(lv_obj_t *parent)
         dev_log_ta = NULL;
         dev_mode_sw = NULL;
         theme_sw = NULL;
+        env_mode_sw = NULL;
+        env_mode_lbl = NULL;
         wifi_list_scr = NULL;
         offset_lbl = NULL;
         ota_overlay = NULL;
@@ -300,7 +316,8 @@ void settings_screen_create(lv_obj_t *parent)
     lv_obj_add_style(card, &g_styles.card, 0);
     lv_obj_set_size(card, DISPLAY_WIDTH - 40, DISPLAY_HEIGHT - 105);
     lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0, -5);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(card, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_AUTO);
 
     /* --- WiFi Status --- */
     wifi_status = lv_label_create(card);
@@ -538,11 +555,49 @@ lv_timer_create([](lv_timer_t *t){
         if(back_cb) back_cb();
     }, LV_EVENT_VALUE_CHANGED, NULL);
 
+    /* --- Sync environment row: Dev/Prod API toggle --- */
+    lv_obj_t *sync_env_row = lv_obj_create(card);
+    lv_obj_remove_style_all(sync_env_row);
+    lv_obj_set_size(sync_env_row, lv_pct(100), 75);
+    lv_obj_align(sync_env_row, LV_ALIGN_TOP_LEFT, 0, 330);
+    lv_obj_set_flex_flow(sync_env_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(sync_env_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(sync_env_row, 20, 0);
+    lv_obj_set_style_pad_left(sync_env_row, 10, 0);
+
+    lv_obj_t *sync_env_title = lv_label_create(sync_env_row);
+    lv_obj_set_style_text_font(sync_env_title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(sync_env_title, ui_theme_text(), 0);
+    lv_label_set_text(sync_env_title, "Sync Endpoint");
+
+#if ENABLE_CLOUD_SYNC
+    env_mode_sw = lv_switch_create(sync_env_row);
+    lv_obj_set_size(env_mode_sw, 70, 40);
+    lv_obj_set_style_bg_color(env_mode_sw, lv_color_hex(0x334155), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(env_mode_sw, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(env_mode_sw, lv_color_hex(0x16A34A), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(env_mode_sw, LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(env_mode_sw, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    if(sync_service_is_prod())
+        lv_obj_add_state(env_mode_sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(env_mode_sw, sync_env_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    env_mode_lbl = lv_label_create(sync_env_row);
+    lv_obj_set_style_text_font(env_mode_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(env_mode_lbl, ui_theme_muted(), 0);
+    lv_label_set_text(env_mode_lbl, sync_service_is_prod() ? "Prod API" : "Dev API");
+#else
+    env_mode_lbl = lv_label_create(sync_env_row);
+    lv_obj_set_style_text_font(env_mode_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(env_mode_lbl, ui_theme_muted(), 0);
+    lv_label_set_text(env_mode_lbl, "Sync disabled");
+#endif
+
     /* --- Button row 2: Developer Mode switch | Clear Logs --- */
     lv_obj_t *btn_row2 = lv_obj_create(card);
     lv_obj_remove_style_all(btn_row2);
     lv_obj_set_size(btn_row2, lv_pct(100), 75);
-    lv_obj_align(btn_row2, LV_ALIGN_TOP_LEFT, 0, 330);
+    lv_obj_align(btn_row2, LV_ALIGN_TOP_LEFT, 0, 405);
     lv_obj_set_flex_flow(btn_row2, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_row2, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(btn_row2, 20, 0);
@@ -607,7 +662,7 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_t *offset_row = lv_obj_create(card);
     lv_obj_remove_style_all(offset_row);
     lv_obj_set_size(offset_row, lv_pct(100), 75);
-    lv_obj_align(offset_row, LV_ALIGN_TOP_LEFT, 0, 405);
+    lv_obj_align(offset_row, LV_ALIGN_TOP_LEFT, 0, 480);
     lv_obj_set_flex_flow(offset_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(offset_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(offset_row, 12, 0);
@@ -700,7 +755,7 @@ lv_timer_create([](lv_timer_t *t){
     /* Log textarea */
     dev_log_ta = lv_textarea_create(card);
     lv_obj_set_size(dev_log_ta, lv_pct(95), 130);
-    lv_obj_align(dev_log_ta, LV_ALIGN_BOTTOM_MID, 0, -5);
+    lv_obj_align(dev_log_ta, LV_ALIGN_TOP_MID, 0, 565);
     lv_obj_set_style_bg_color(dev_log_ta, ui_theme_surface(), 0);
     lv_obj_set_style_bg_opa(dev_log_ta, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(dev_log_ta, ui_theme_muted(), 0);

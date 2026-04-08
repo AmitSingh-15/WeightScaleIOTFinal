@@ -273,6 +273,20 @@ void storage_forget_wifi_credentials(void)
 }
 
 /* =========================================================
+   ENVIRONMENT (Dev/Prod) STORAGE
+=========================================================*/
+
+void storage_save_env_prod(bool is_prod)
+{
+    prefs.putBool("env_prod", is_prod);
+}
+
+bool storage_load_env_prod(void)
+{
+    return prefs.getBool("env_prod", false);  /* default = Dev */
+}
+
+/* =========================================================
    CALIBRATION PROFILE STORAGE
    Supports up to 4 profiles (index 0–3)
 =========================================================*/

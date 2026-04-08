@@ -18,11 +18,17 @@ static HTTPClient *g_active_http = nullptr;
    CONFIG
 ========================================================= */
 
-static const char *HEALTH_URL =
+static const char *DEV_HEALTH_URL =
 "https://dev.etranscargo.in/weightscale/health";
 
-static const char *BULK_URL =
+static const char *DEV_BULK_URL =
 "https://dev.etranscargo.in/weightscale/api/WeightIngestion/bulk";
+
+static const char *PROD_HEALTH_URL =
+"https://etranscargo.in/weightscale/health";
+
+static const char *PROD_BULK_URL =
+"https://etranscargo.in/weightscale/api/WeightIngestion/bulk";
 
 static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
 static const unsigned long HTTPS_STARTUP_COOLDOWN_MS = 10000;
@@ -33,6 +39,24 @@ static bool sync_paused = false;
 static unsigned long last_http_done_ms = 0;
 
 static bool sync_deinited = false;
+static bool g_env_is_prod = false;
+
+static void finish_sync_attempt(void)
+{
+    sync_busy = false;
+    last_http_done_ms = millis();
+    g_active_http = nullptr;
+}
+
+static const char *current_health_url(void)
+{
+    return g_env_is_prod ? PROD_HEALTH_URL : DEV_HEALTH_URL;
+}
+
+static const char *current_bulk_url(void)
+{
+    return g_env_is_prod ? PROD_BULK_URL : DEV_BULK_URL;
+}
 
 /* ========================================================= */
 
@@ -46,6 +70,18 @@ unsigned long sync_service_last_http_ms(void)
     return last_http_done_ms;
 }
 
+void sync_service_set_env(bool is_prod)
+{
+    g_env_is_prod = is_prod;
+    storage_save_env_prod(is_prod);
+    devlog_printf("[SYNC] Environment set to %s", is_prod ? "PROD" : "DEV");
+}
+
+bool sync_service_is_prod(void)
+{
+    return g_env_is_prod;
+}
+
 void sync_service_init(void)
 {
     last_sync_attempt = 0;
@@ -53,6 +89,8 @@ void sync_service_init(void)
     sync_paused = false;
     sync_deinited = false;
     last_http_done_ms = 0;
+    g_env_is_prod = storage_load_env_prod();
+    devlog_printf("[SYNC] Init in %s mode", g_env_is_prod ? "PROD" : "DEV");
 }
 
 /* =========================================================
@@ -193,6 +231,7 @@ void sync_service_deinit(void)
 void sync_service_loop(void)
 {
     if (sync_paused || sync_deinited) return;
+    if (sync_busy) return;
 
     unsigned long now = millis();
 
@@ -238,8 +277,9 @@ void sync_service_loop(void)
         return;
     }
 
-    devlog_printf("[SYNC] Starting upload attempt");
     sync_busy = true;
+    devlog_printf("[SYNC] Starting upload attempt (%s)",
+                  g_env_is_prod ? "PROD" : "DEV");
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -251,10 +291,9 @@ void sync_service_loop(void)
 
     /* HEALTH */
 
-    if (!http.begin(client, HEALTH_URL))
+    if (!http.begin(client, current_health_url()))
     {
-        sync_busy = false;
-        last_http_done_ms = millis();
+        finish_sync_attempt();
         return;
     }
 
@@ -262,12 +301,9 @@ void sync_service_loop(void)
     String healthResp = http.getString();
     http.end();
 
-    g_active_http = nullptr;
-
     if (healthCode < 200 || healthCode >= 300 || healthResp.indexOf("Healthy") < 0)
     {
-        sync_busy = false;
-        last_http_done_ms = millis();
+        finish_sync_attempt();
         return;
     }
 
@@ -276,8 +312,7 @@ void sync_service_loop(void)
     String postBody = build_payload();
     if (postBody.length() == 0)
     {
-        sync_busy = false;
-        last_http_done_ms = millis();
+        finish_sync_attempt();
         return;
     }
 
@@ -285,10 +320,9 @@ void sync_service_loop(void)
 
     /* POST */
 
-    if (!http.begin(client, BULK_URL))
+    if (!http.begin(client, current_bulk_url()))
     {
-        sync_busy = false;
-        last_http_done_ms = millis();
+        finish_sync_attempt();
         return;
     }
 
@@ -298,8 +332,6 @@ void sync_service_loop(void)
     int postCode = http.POST(postBody);
     String resp = http.getString();
     http.end();
-
-    g_active_http = nullptr;
 
     devlog_printf("[SYNC] POST code=%d resp=%s",
                   postCode, resp.c_str());
@@ -326,8 +358,7 @@ void sync_service_loop(void)
         devlog_printf("[SYNC] Upload failed - server rejected");
     }
 
-    sync_busy = false;
-    last_http_done_ms = millis();
+    finish_sync_attempt();
 }
 
 #endif

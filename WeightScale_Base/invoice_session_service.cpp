@@ -72,7 +72,7 @@ const char* invoice_session_get_summary(void)
     for (uint8_t i = 0; i < item_count; i++) {
         int written = snprintf(summary_buffer + offset,
                                sizeof(summary_buffer) - offset,
-                               "%.2f kg x %d\n",
+                               "%.1f kg x %d\n",
                                items[i].weight,
                                items[i].qty);
         if (written > 0) offset += written;

@@ -101,7 +101,7 @@ void ui_main_set_weight(float kg, bool hold)
     if (label_weight)
     {
         char buf[32];
-        snprintf(buf, sizeof(buf), "%.2f kg", kg);
+        snprintf(buf, sizeof(buf), "%.1f kg", kg);
         lv_label_set_text(label_weight, buf);
     }
     if (label_hold)

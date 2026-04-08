@@ -59,8 +59,8 @@ static float g_manual_offset = 0.0f;   // +/- kg added to non-zero readings
 
 static float normalize_weight_for_ui_and_items(float weight)
 {
-    if (weight < 0.2f) return 0.0f;
-    return roundf(weight);
+    if (weight < 0.5f) return 0.0f;  /* heavy machine — under 500g is noise */
+    return roundf(weight * 2.0f) / 2.0f;  /* snap to 0.5 kg steps: 1.2→1.0, 1.3→1.5, 1.8→2.0 */
 }
 
 /* ===== TEST MODE ===== */
@@ -254,7 +254,7 @@ void app_controller_loop(void)
         if (g_weight_update_cb) g_weight_update_cb(w);
     }
 
-    if (w < 0.05f) {
+    if (w < 0.50f) {  /* heavy machine — under 500g means empty */
         if (g_weight_flow_state != WEIGHT_WAIT_FOR_LOAD) {
             g_weight_flow_state = WEIGHT_WAIT_FOR_LOAD;
             g_stable_weight = 0.0f;
@@ -270,11 +270,11 @@ void app_controller_loop(void)
                 break;
 
             case WEIGHT_WAIT_FOR_STABLE:
-                if (fabsf(w - g_stable_weight) >= 0.02f) {
+                if (fabsf(w - g_stable_weight) >= 0.50f) {  /* heavy machine — 500g jitter ok */
                     g_stable_weight = w;
                     g_stable_start = millis();
                 } else if (g_stable_start != 0 &&
-                           (millis() - g_stable_start) > 600) {
+                           (millis() - g_stable_start) > 400) {  /* was 600ms */
                     invoice_session_add_weight_entry(w);
                     invoice_session_set_selected_qty(1);
                     app_controller_notify_invoice_update();

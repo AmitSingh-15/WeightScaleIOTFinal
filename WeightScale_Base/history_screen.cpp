@@ -100,7 +100,7 @@ static void add_record_row(uint32_t idx, const invoice_record_t *rec, float inv_
     /* Single label: idx | INV# | unit weight x qty = item weight | invoice total | sync */
     char buf[160];
     snprintf(buf, sizeof(buf),
-             "%lu. INV#%lu  %.2fkg x%d = %.2fkg  | Inv: %.2fkg  %s",
+             "%lu. INV#%lu  %.1fkg x%d = %.1fkg  | Inv: %.1fkg  %s",
              idx + 1,
              rec->invoice_id,
              rec->weight,

@@ -479,7 +479,7 @@ void home_screen_refresh_invoice_details(void)
             {
                 total_weight += (it->weight * (float)it->qty);
                 snprintf(g_format_buf, sizeof(g_format_buf),
-                         "%d. %.2f kg x %d = %.2f kg",
+                         "%d. %.1f kg x %d = %.1f kg",
                          i + 1,
                          it->weight,
                          it->qty,
@@ -498,7 +498,7 @@ void home_screen_refresh_invoice_details(void)
     }
 
     if(lbl_total_weight && lv_obj_is_valid(lbl_total_weight)) {
-        snprintf(g_format_buf, sizeof(g_format_buf), "Total: %.2f kg", total_weight);
+        snprintf(g_format_buf, sizeof(g_format_buf), "Total: %.1f kg", total_weight);
         lv_label_set_text(lbl_total_weight, g_format_buf);
     }
 }
@@ -507,7 +507,7 @@ void home_screen_set_weight(float w)
 {
     if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) return;
 
-    snprintf(g_format_buf, sizeof(g_format_buf), "%.2f", w);
+    snprintf(g_format_buf, sizeof(g_format_buf), "%.1f", w);
     lv_label_set_text(lbl_weight, g_format_buf);
 }
 

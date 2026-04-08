@@ -13,8 +13,8 @@ static scale_profile_t activeProfile =
     "DEFAULT",
     1.0f,
     2174.0,
-    0.35f,
-    0.08f,
+    0.70f,           // ema_alpha — heavy machine, grams don't matter
+    0.30f,           // hold_threshold — was 0.08, 300g tolerance for heavy scale
     500
 };
 
@@ -34,14 +34,14 @@ static volatile bool g_filter_reset_pending = false;
 
 /* Auto-zero state */
 static bool auto_zero_enabled = true;
-static const float AUTO_ZERO_THRESHOLD = 0.05f;   /* kg */
+static const float AUTO_ZERO_THRESHOLD = 0.30f;   /* kg — was 0.05, heavy machine tolerance */
 static const unsigned long AUTO_ZERO_STABLE_MS = 2000; /* 2 seconds stable */
 static const unsigned long AUTO_ZERO_COOLDOWN_MS = 10000; /* 10s between zeros */
-static const unsigned long RAW_STABLE_MS = 500; /* raw display/capture settles first */
-static const float FAST_TRACK_STEP_KG = 5.0f; /* big loads should snap quickly */
-static const float MEDIUM_TRACK_STEP_KG = 1.0f;
-static const float RETURN_ZERO_THRESHOLD_KG = 0.20f;
-static const unsigned long RETURN_ZERO_MS = 2000;
+static const unsigned long RAW_STABLE_MS = 250; /* was 500 — settle faster */
+static const float FAST_TRACK_STEP_KG = 3.0f; /* was 5.0 — snap sooner */
+static const float MEDIUM_TRACK_STEP_KG = 0.5f; /* was 1.0 — use fast EMA for smaller changes */
+static const float RETURN_ZERO_THRESHOLD_KG = 0.50f; /* was 0.20 — heavy machine, under 500g = zero */
+static const unsigned long RETURN_ZERO_MS = 500; /* was 2000 — snap to zero fast */
 static unsigned long auto_zero_stable_since = 0;
 static unsigned long auto_zero_last_tare = 0;
 static bool auto_zero_was_loaded = false;  /* track if weight was on scale recently */
@@ -60,7 +60,7 @@ static void scale_task(void *p)
     scale.set_scale(activeProfile.scale);
     scale.tare();
 
-    const int SAMPLE_COUNT = 8;      // faster response while keeping trimmed averaging
+    const int SAMPLE_COUNT = 4;      // was 8 — fill buffer in 100ms instead of 320ms
     float samples[SAMPLE_COUNT];
     long raw_samples[SAMPLE_COUNT];
     int index = 0;
@@ -92,7 +92,7 @@ static void scale_task(void *p)
         {
             /* Read tare-adjusted raw counts once here. This task is the only
                code path allowed to talk to HX711 directly. */
-            long raw = scale.get_value(3);
+            long raw = scale.get_value(1);  /* was 3 — trimmed avg handles noise, no need to block here */
 
             float w;
             if(activeCal.valid) {
@@ -104,20 +104,19 @@ static void scale_task(void *p)
             /* ===== REJECT ZERO-SPIKES =====
                If we have a valid last reading and this one drops to ~0,
                it's almost certainly a HX711 glitch — skip it. */
-            if(last_valid > 0.5f && fabs(w) < 0.05f) {
+            if(last_valid > 1.0f && fabs(w) < 0.10f) {  /* heavy machine thresholds */
                 consecutive_fails++;
-                if(consecutive_fails < 5) {
-                    /* Ignore this glitch read, keep previous value */
-                    vTaskDelay(pdMS_TO_TICKS(30));
+                if(consecutive_fails < 3) {  /* was 5 — accept real removal faster */
+                    vTaskDelay(pdMS_TO_TICKS(20));
                     continue;
                 }
-                /* If 5+ consecutive "zeros", accept it as real (weight removed) */
+                /* If 3+ consecutive "zeros", accept it as real (weight removed) */
             }
             consecutive_fails = 0;
 
-            /* Clamp small negatives to zero */
+            /* Clamp small values to zero — heavy machine, sub-100g is noise */
             if(w < 0.0f) w = 0.0f;
-            if(w < 0.01f) {
+            if(w < 0.10f) {
                 w = 0.0f;
                 raw = 0;
             }
@@ -154,9 +153,9 @@ static void scale_task(void *p)
                     sorted[j+1] = key;
                 }
 
-                /* Trim 2 from each end */
+                /* Trim 1 from each end (was 2, adjusted for smaller buffer) */
                 float sum = 0;
-                const int trim = 2;
+                const int trim = 1;
                 for(int i = trim; i < SAMPLE_COUNT - trim; i++)
                     sum += sorted[i];
                 float avg = sum / (SAMPLE_COUNT - 2 * trim);
@@ -196,19 +195,17 @@ static void scale_task(void *p)
                 }
 
                 /* ---------- SPIKE REJECTION ---------- */
-                float diff = fabs(avg - last_valid);
-                if(diff < activeProfile.hold_threshold || diff > 0.3f) {
-                    /* Accept: either within normal jitter, or a real change */
-                    last_valid = avg;
-                }
-                /* else: moderate spike — ignore, keep last_valid */
+                /* Heavy machine: accept if within jitter OR a real change (>hold_threshold).
+                   No dead zone — hold_threshold is 0.30 so anything that passes trimmed
+                   average is either noise (<0.30) or real (>0.30). */
+                last_valid = avg;
 
                 /* ---------- ADAPTIVE SMOOTH ---------- */
                 float filter_diff = fabsf(last_valid - filtered_weight);
                 if(filter_diff >= FAST_TRACK_STEP_KG) {
                     filtered_weight = last_valid;
                 } else if(filter_diff >= MEDIUM_TRACK_STEP_KG) {
-                    filtered_weight = ema(filtered_weight, last_valid, 0.70f);
+                    filtered_weight = ema(filtered_weight, last_valid, 0.85f); /* was 0.70 */
                 } else {
                     filtered_weight = ema(
                         filtered_weight,
@@ -271,7 +268,7 @@ static void scale_task(void *p)
             continue;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(40));
+        vTaskDelay(pdMS_TO_TICKS(25));  /* was 40 — faster sampling loop */
     }
 }
 
@@ -391,14 +388,14 @@ bool scale_service_should_add_item(float *stable_weight)
 
     float w = scale_service_get_weight();
 
-    if(fabs(w - last_weight) < 0.02f)   // stability threshold
+    if(fabs(w - last_weight) < 0.50f)   // stability threshold — heavy machine, 500g tolerance
     {
         if(stable_start == 0)
             stable_start = millis();
 
-        if(!captured && (millis() - stable_start > 600))
+        if(!captured && (millis() - stable_start > 400))  /* was 600ms */
         {
-            if(w > 0.05f)
+            if(w > 0.50f)  /* heavy machine — meaningful weight starts at 500g */
             {
                 *stable_weight = w;
                 captured = true;

@@ -15,6 +15,7 @@
 #include "scale_service_v2.h"
 #include "invoice_session_service.h"
 #include "storage_service.h"
+#include "time_service.h"
 #include "ui_styles.h"
 
 // Screen includes for UI event handling
@@ -53,6 +54,7 @@ static bool g_initialized = false;
 static float g_last_weight = 0.0f;
 static bool g_wifi_safe = true;       // false when crash loop detected
 static bool g_crash_counter_cleared = false;
+static unsigned long g_last_midnight_check_ms = 0;
 
 /* ===== MANUAL WEIGHT OFFSET ===== */
 static float g_manual_offset = 0.0f;   // +/- kg added to non-zero readings
@@ -82,6 +84,7 @@ static unsigned long g_stable_start = 0;
 /* Forward declaration */
 static void app_controller_notify_invoice_update(void);
 static void app_controller_restore_home_screen(void);
+static void app_controller_run_midnight_clear_check(void);
 
 #if ENABLE_WIFI_SERVICE
 static bool g_wifi_connected = false;
@@ -118,6 +121,7 @@ void app_controller_init(void)
 
     // Always init these services
     storage_service_init();     // Must be first — other services load from NVS
+    time_service_init();
     scale_service_init();
     devlog_printf("[CTRL] ✓ Scale service initialized");
 
@@ -154,7 +158,11 @@ void app_controller_init(void)
         wifi_service_register_state_callback([](wifi_state_t state) {
             g_wifi_connected = (state == WIFI_CONNECTED);
             const char *status;
-            if(state == WIFI_CONNECTED)       status = "Online";
+            if(state == WIFI_CONNECTED) {
+                status = "Online";
+                time_service_request_ntp_sync();
+                devlog_printf("[CTRL] NTP sync requested (WiFi online)");
+            }
             else if(state == WIFI_CONNECTING) status = "Connecting...";
             else                              status = "Offline";
             home_screen_set_sync_status(status);
@@ -231,6 +239,8 @@ void app_controller_loop(void)
 #if ENABLE_CLOUD_SYNC
     if (g_wifi_safe) sync_service_loop();
 #endif
+
+    app_controller_run_midnight_clear_check();
 
     if (g_test_mode) {
         unsigned long now = millis();
@@ -338,6 +348,28 @@ static void app_controller_notify_invoice_update(void)
 
     if (g_invoice_cb) {
         g_invoice_cb(invoice_session_get_summary());
+    }
+}
+
+static void app_controller_run_midnight_clear_check(void)
+{
+    unsigned long now_ms = millis();
+    if((now_ms - g_last_midnight_check_ms) < 1000UL) return;
+    g_last_midnight_check_ms = now_ms;
+
+    if(!time_service_is_valid()) return;
+
+    uint32_t today = time_service_today_epoch_day();
+    uint32_t last_auto_clear_day = storage_load_last_auto_clear_day();
+
+    if(last_auto_clear_day == 0) {
+        storage_save_last_auto_clear_day(today);
+        return;
+    }
+
+    if(today != last_auto_clear_day) {
+        devlog_printf("[CTRL] Midnight reached -> auto clear all");
+        app_controller_clear_all_data();
     }
 }
 
@@ -750,19 +782,21 @@ void app_controller_handle_ui_event(int event_id)
         case UI_EVT_RESET:
         {
             uint8_t cnt = invoice_session_count();
-            devlog_printf("[CTRL] → Finalize invoice #%lu (%u items)",
+            devlog_printf("[CTRL] → Finalize S/N #%lu (%u items)",
                           invoice_service_current_id(), cnt);
             if (cnt > 0) {
                 invoice_session_commit();
                 invoice_service_next();
-                devlog_printf("[CTRL] Invoice saved. Next invoice #%lu",
-                              invoice_service_current_id());
+                uint32_t next_id = invoice_service_current_id();
+                devlog_printf("[CTRL] Saved. Next S/N #%lu", next_id);
+                /* Show popup with next serial number */
+                home_screen_show_save_popup(next_id);
             } else {
                 devlog_printf("[CTRL] No items to finalize");
             }
             /* Reset keypad qty back to 1 */
             invoice_session_set_selected_qty(1);
-            /* Update invoice number on home screen */
+            /* Update serial number on home screen */
             home_screen_set_invoice(invoice_service_current_id());
             app_controller_notify_invoice_update();
             break;
@@ -770,12 +804,7 @@ void app_controller_handle_ui_event(int event_id)
 
         case UI_EVT_RESET_ALL:
             devlog_printf("[CTRL] → Reset ALL invoices");
-            invoice_session_clear();
-            storage_clear_all_records();
-            storage_reset_pending();
-            invoice_service_reset();
-            home_screen_set_invoice(invoice_service_current_id());
-            app_controller_notify_invoice_update();
+            app_controller_clear_all_data();
             break;
 
         case UI_EVT_CALIBRATE:
@@ -998,4 +1027,40 @@ void app_controller_set_manual_offset(float offset_kg)
 float app_controller_get_manual_offset(void)
 {
     return g_manual_offset;
+}
+
+void app_controller_clear_all_data(void)
+{
+    invoice_session_clear();
+    storage_clear_all_records();
+    storage_reset_pending();
+    invoice_service_reset();
+
+    if(time_service_is_valid()) {
+        uint32_t today = time_service_today_epoch_day();
+        storage_save_last_day(today);
+        storage_save_last_auto_clear_day(today);
+    }
+
+    home_screen_set_invoice(invoice_service_current_id());
+    app_controller_notify_invoice_update();
+    devlog_printf("[CTRL] All invoice data cleared");
+}
+
+bool app_controller_set_datetime(int year, int month, int day, int hour, int minute)
+{
+    bool ok = time_service_set_datetime(year, month, day, hour, minute, 0);
+    if(!ok) return false;
+
+    uint32_t today = time_service_today_epoch_day();
+    storage_save_last_day(today);
+    storage_save_last_auto_clear_day(today);
+    devlog_printf("[CTRL] Time set to %04d-%02d-%02d %02d:%02d",
+                  year, month, day, hour, minute);
+    return true;
+}
+
+void app_controller_get_time_text(char *out, size_t max)
+{
+    time_service_format_datetime(out, max);
 }

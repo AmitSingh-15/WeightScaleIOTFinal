@@ -10,6 +10,7 @@
 #include "ui_styles.h"
 #include "ui_events.h"
 #include "invoice_session_service.h"
+#include "time_service.h"
 // ✅ REFACTORED: Removed #include "wifi_service.h" - WiFi is now decoupled
 // ✅ Use app_controller instead for WiFi state updates
 
@@ -23,6 +24,7 @@ static lv_obj_t *lbl_total_weight;
 static lv_obj_t *lbl_invoice;
 static lv_obj_t *lbl_device;
 static lv_obj_t *lbl_sync;
+static lv_obj_t *lbl_clock;
 static lv_obj_t *version_label;   // ✅ ADDED
 
 static lv_obj_t *item_labels[MAX_INVOICE_ITEMS];
@@ -37,6 +39,31 @@ static char g_format_buf[64];  // Largest size needed (for device name)
 static int keypad_value = 1;
 static bool keypad_started = false;
 
+/* Keypad toggle state */
+static lv_obj_t *keypad_box_obj = NULL;
+static bool keypad_visible = false;
+
+/* Save popup state */
+static lv_obj_t *save_popup = NULL;
+static lv_timer_t *save_popup_timer = NULL;
+static lv_timer_t *clock_timer = NULL;
+
+static void home_screen_update_weight_scale(void)
+{
+    if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) return;
+
+    /* Use only compiled-in fonts to avoid clipping issues on this target. */
+    lv_obj_set_style_text_font(lbl_weight,
+        keypad_visible ? &lv_font_montserrat_36 : &lv_font_montserrat_48, 0);
+}
+
+static void home_screen_refresh_clock(void)
+{
+    if(!lbl_clock || !lv_obj_is_valid(lbl_clock)) return;
+    time_service_format_hhmm(g_format_buf, sizeof(g_format_buf));
+    lv_label_set_text(lbl_clock, g_format_buf);
+}
+
 /* Null-out every static pointer so setters become no-ops
    while the home screen does not exist.                  */
 static void home_screen_cleanup(void)
@@ -47,6 +74,7 @@ static void home_screen_cleanup(void)
     lbl_invoice  = NULL;
     lbl_device   = NULL;
     lbl_sync     = NULL;
+    lbl_clock    = NULL;
     version_label = NULL;
     for(int i = 0; i < MAX_INVOICE_ITEMS; i++) {
         item_labels[i] = NULL;
@@ -55,6 +83,12 @@ static void home_screen_cleanup(void)
     event_cb     = NULL;
     keypad_value = 1;
     keypad_started = false;
+    keypad_box_obj = NULL;
+    keypad_visible = false;
+    if(clock_timer) { lv_timer_del(clock_timer); clock_timer = NULL; }
+    if(save_popup_timer) { lv_timer_del(save_popup_timer); save_popup_timer = NULL; }
+    if(save_popup && lv_obj_is_valid(save_popup)) { lv_obj_del(save_popup); }
+    save_popup = NULL;
 }
 
 /* Called automatically when the home-screen parent is deleted */
@@ -139,6 +173,29 @@ static void keypad_btn_cb(lv_event_t *e)
     keypad_update_qty();
 }
 
+static void multiply_btn_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = lv_event_get_target(e);
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_obj_add_style(btn, &g_styles.btn_pressed, 0);
+        return;
+    } else if (code == LV_EVENT_RELEASED) {
+        lv_obj_remove_style(btn, &g_styles.btn_pressed, 0);
+    }
+    if (code != LV_EVENT_RELEASED) return;
+
+    if(!keypad_box_obj || !lv_obj_is_valid(keypad_box_obj)) return;
+    keypad_visible = !keypad_visible;
+    if(keypad_visible) {
+        lv_obj_clear_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);
+    }
+    home_screen_update_weight_scale();
+}
+
 void home_screen_register_callback(void (*cb)(int evt))
 {
     event_cb = cb;
@@ -167,12 +224,6 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_style_pad_right(status_bar, 15, 0);
     lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    lbl_invoice = lv_label_create(status_bar);
-    lv_obj_set_style_text_font(lbl_invoice, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_invoice, ui_theme_accent(), 0);
-    lv_label_set_text(lbl_invoice, "Invoice #1");
-    lv_obj_align(lbl_invoice, LV_ALIGN_LEFT_MID, 0, 0);
-
     lbl_device = lv_label_create(status_bar);
     lv_obj_set_style_text_color(lbl_device, ui_theme_muted(), 0);
     lv_obj_set_style_text_font(lbl_device, &lv_font_montserrat_16, 0);
@@ -198,18 +249,33 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
+    lbl_clock = lv_label_create(header);
+    lv_obj_set_style_text_color(lbl_clock, ui_theme_accent(), 0);
+    lv_obj_set_style_text_font(lbl_clock, &lv_font_montserrat_20, 0);
+    lv_label_set_text(lbl_clock, "--:--");
+    lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 18, 0);
+
     /* Buttons row — full width with even spacing */
     lv_obj_t *hdr_btns = lv_obj_create(header);
     lv_obj_remove_style_all(hdr_btns);
-    lv_obj_set_size(hdr_btns, DISPLAY_WIDTH - 20, 54);
-    lv_obj_align(hdr_btns, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(hdr_btns, DISPLAY_WIDTH - 180, 54);
+    lv_obj_align(hdr_btns, LV_ALIGN_RIGHT_MID, -10, 0);
     lv_obj_set_flex_flow(hdr_btns, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(hdr_btns, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(hdr_btns, 8, 0);
+    lv_obj_set_style_pad_gap(hdr_btns, 6, 0);
+
+    /* SERIAL NUMBER (display button) */
+    lv_obj_t *sn_btn = lv_btn_create(hdr_btns);
+    lv_obj_set_size(sn_btn, 150, 48);
+    lv_obj_add_style(sn_btn, &g_styles.btn_action, 0);
+    lbl_invoice = lv_label_create(sn_btn);
+    lv_obj_set_style_text_font(lbl_invoice, &lv_font_montserrat_16, 0);
+    lv_label_set_text(lbl_invoice, "S/N #1");
+    lv_obj_center(lbl_invoice);
 
     /* HISTORY */
     lv_obj_t *history_btn = lv_btn_create(hdr_btns);
-    lv_obj_set_size(history_btn, 185, 48);
+    lv_obj_set_size(history_btn, 150, 48);
     lv_obj_add_style(history_btn, &g_styles.btn_secondary, 0);
     lv_obj_add_event_cb(history_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_HISTORY);
     lv_obj_add_event_cb(history_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_HISTORY);
@@ -218,31 +284,20 @@ void home_screen_create(lv_obj_t *parent)
     lv_label_set_text(his_lbl, LV_SYMBOL_LIST " HISTORY");
     lv_obj_center(his_lbl);
 
-    /* CALIBRATE */
+    /* SET TO ZERO */
     lv_obj_t *cal_btn = lv_btn_create(hdr_btns);
-    lv_obj_set_size(cal_btn, 185, 48);
+    lv_obj_set_size(cal_btn, 155, 48);
     lv_obj_add_style(cal_btn, &g_styles.btn_warning, 0);
     lv_obj_add_event_cb(cal_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_CALIBRATE);
     lv_obj_add_event_cb(cal_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_CALIBRATE);
     lv_obj_t *cal_lbl = lv_label_create(cal_btn);
     lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_16, 0);
-    lv_label_set_text(cal_lbl, LV_SYMBOL_REFRESH " CALIBRATE");
+    lv_label_set_text(cal_lbl, LV_SYMBOL_REFRESH " Set to zero");
     lv_obj_center(cal_lbl);
-
-    /* CLEAR */
-    lv_obj_t *clear_btn = lv_btn_create(hdr_btns);
-    lv_obj_set_size(clear_btn, 185, 48);
-    lv_obj_add_style(clear_btn, &g_styles.btn_danger, 0);
-    lv_obj_add_event_cb(clear_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESET_ALL);
-    lv_obj_add_event_cb(clear_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESET_ALL);
-    lv_obj_t *clr_lbl = lv_label_create(clear_btn);
-    lv_obj_set_style_text_font(clr_lbl, &lv_font_montserrat_16, 0);
-    lv_label_set_text(clr_lbl, LV_SYMBOL_TRASH " CLEAR");
-    lv_obj_center(clr_lbl);
 
     /* SETTINGS */
     lv_obj_t *settings_btn = lv_btn_create(hdr_btns);
-    lv_obj_set_size(settings_btn, 185, 48);
+    lv_obj_set_size(settings_btn, 155, 48);
     lv_obj_add_style(settings_btn, &g_styles.btn_primary, 0);
     lv_obj_add_event_cb(settings_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_SETTINGS);
     lv_obj_add_event_cb(settings_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_SETTINGS);
@@ -251,15 +306,15 @@ void home_screen_create(lv_obj_t *parent)
     lv_label_set_text(set_lbl, LV_SYMBOL_SETTINGS " SETTINGS");
     lv_obj_center(set_lbl);
 
-    /* WIFI */
+    /* Wi-Fi Setting */
     lv_obj_t *wifi_btn = lv_btn_create(hdr_btns);
-    lv_obj_set_size(wifi_btn, 185, 48);
+    lv_obj_set_size(wifi_btn, 160, 48);
     lv_obj_add_style(wifi_btn, &g_styles.btn_action, 0);
     lv_obj_add_event_cb(wifi_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_WIFI_DIRECT);
     lv_obj_add_event_cb(wifi_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_WIFI_DIRECT);
     lv_obj_t *wifi_lbl = lv_label_create(wifi_btn);
     lv_obj_set_style_text_font(wifi_lbl, &lv_font_montserrat_16, 0);
-    lv_label_set_text(wifi_lbl, LV_SYMBOL_WIFI " WIFI");
+    lv_label_set_text(wifi_lbl, LV_SYMBOL_WIFI " Wi-Fi Setting");
     lv_obj_center(wifi_lbl);
 
 
@@ -270,62 +325,113 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_size(main, DISPLAY_WIDTH, DISPLAY_HEIGHT - 94);
     lv_obj_align(main, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    /* ===== LEFT PANEL - Weight & Controls (640px) ===== */
+    /* ===== LEFT PANEL - Weight & Controls (flex column, expanded) ===== */
 
     lv_obj_t *left = lv_obj_create(main);
     lv_obj_add_style(left,&g_styles.card,0);
-    lv_obj_set_size(left, 640, DISPLAY_HEIGHT - 100);
+    lv_obj_set_size(left, DISPLAY_WIDTH - 200, DISPLAY_HEIGHT - 100);
     lv_obj_align(left,LV_ALIGN_LEFT_MID,5,0);
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(left, 6, 0);
     lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(left, LV_SCROLLBAR_MODE_OFF);
 
-    /* --- WEIGHT DISPLAY --- */
+    /* --- WEIGHT DISPLAY (grows to fill available space) --- */
     lv_obj_t *weight_box = lv_obj_create(left);
-    lv_obj_set_size(weight_box, 610, 150);
-    lv_obj_align(weight_box, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_width(weight_box, lv_pct(100));
+    lv_obj_set_flex_grow(weight_box, 1);  /* hero element — expands when keypad hidden */
+    lv_obj_set_style_min_height(weight_box, 150, 0);
     lv_obj_set_style_bg_color(weight_box, ui_theme_surface(), 0);
     lv_obj_set_style_bg_opa(weight_box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(weight_box, 12, 0);
     lv_obj_set_style_border_width(weight_box, 2, 0);
     lv_obj_set_style_border_color(weight_box, ui_theme_border(), 0);
-    lv_obj_set_style_pad_all(weight_box, 0, 0);
+    lv_obj_set_style_pad_top(weight_box, 10, 0);
+    lv_obj_set_style_pad_bottom(weight_box, 10, 0);
+    lv_obj_set_style_pad_left(weight_box, 12, 0);
+    lv_obj_set_style_pad_right(weight_box, 12, 0);
+    lv_obj_set_style_pad_gap(weight_box, 8, 0);
     lv_obj_clear_flag(weight_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(weight_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(weight_box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *kg_label = lv_label_create(weight_box);
     lv_obj_set_style_text_font(kg_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(kg_label, ui_theme_muted(), 0);
     lv_label_set_text(kg_label, "WEIGHT (kg)");
-    lv_obj_align(kg_label, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_set_width(kg_label, lv_pct(100));
+    lv_obj_set_style_text_align(kg_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    lbl_weight = lv_label_create(weight_box);
+    lv_obj_t *weight_value_wrap = lv_obj_create(weight_box);
+    lv_obj_remove_style_all(weight_value_wrap);
+    lv_obj_set_width(weight_value_wrap, lv_pct(100));
+    lv_obj_set_flex_grow(weight_value_wrap, 1);
+    lv_obj_set_style_pad_top(weight_value_wrap, 12, 0);
+    lv_obj_set_style_pad_bottom(weight_value_wrap, 12, 0);
+    lv_obj_clear_flag(weight_value_wrap, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(weight_value_wrap, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(weight_value_wrap, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lbl_weight = lv_label_create(weight_value_wrap);
     lv_obj_set_style_text_font(lbl_weight, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(lbl_weight,
         ui_styles_is_light_mode() ? lv_color_hex(0x0E7490) : lv_color_hex(0x22D3EE), 0);
     lv_label_set_text(lbl_weight,"0.00");
-    lv_obj_align(lbl_weight, LV_ALIGN_CENTER, 0, 12);
+    lv_obj_set_width(lbl_weight, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_align(lbl_weight, LV_TEXT_ALIGN_CENTER, 0);
+    home_screen_update_weight_scale();
 
-    /* ===== QUANTITY KEYPAD ===== */
+    /* ===== QTY / MULTIPLY / TOTAL — single row, clipped labels ===== */
 
-    lv_obj_t *keypad_box = lv_obj_create(left);
-    lv_obj_remove_style_all(keypad_box);
-    lv_obj_set_size(keypad_box, 610, 200);
-    lv_obj_align(keypad_box, LV_ALIGN_TOP_MID, 0, 160);
-    lv_obj_clear_flag(keypad_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *qty_row = lv_obj_create(left);
+    lv_obj_remove_style_all(qty_row);
+    lv_obj_set_size(qty_row, lv_pct(100), 46);
+    lv_obj_clear_flag(qty_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(qty_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(qty_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(qty_row, 0, 0);
+    lv_obj_set_style_pad_right(qty_row, 0, 0);
+    lv_obj_set_style_pad_top(qty_row, 0, 0);
+    lv_obj_set_style_pad_bottom(qty_row, 0, 0);
+    lv_obj_set_style_pad_gap(qty_row, 10, 0);
 
-    /* Qty display label */
-    lbl_qty = lv_label_create(keypad_box);
+    lbl_qty = lv_label_create(qty_row);
     lv_obj_add_style(lbl_qty, &g_styles.value_big, 0);
     lv_label_set_text(lbl_qty, "Qty: 1");
+    lv_label_set_long_mode(lbl_qty, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(lbl_qty, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(lbl_qty, 200);
-    lv_obj_align(lbl_qty, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_width(lbl_qty, 205);
 
-    lbl_total_weight = lv_label_create(keypad_box);
+    /* Multiply button — toggles keypad visibility */
+    lv_obj_t *mult_btn = lv_btn_create(qty_row);
+    lv_obj_set_size(mult_btn, 150, 42);
+    lv_obj_add_style(mult_btn, &g_styles.btn_warning, 0);
+    lv_obj_set_style_pad_hor(mult_btn, 10, 0);
+    lv_obj_set_style_pad_ver(mult_btn, 6, 0);
+    lv_obj_set_style_min_height(mult_btn, 42, 0);
+    lv_obj_add_event_cb(mult_btn, multiply_btn_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(mult_btn, multiply_btn_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_t *mult_lbl = lv_label_create(mult_btn);
+    lv_obj_set_style_text_font(mult_lbl, &lv_font_montserrat_16, 0);
+    lv_label_set_text(mult_lbl, LV_SYMBOL_EDIT " Multiply");
+    lv_obj_center(mult_lbl);
+
+    lbl_total_weight = lv_label_create(qty_row);
     lv_obj_add_style(lbl_total_weight, &g_styles.value_big, 0);
+    lv_label_set_long_mode(lbl_total_weight, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(lbl_total_weight, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(lbl_total_weight, 410);
-    lv_obj_align(lbl_total_weight, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_width(lbl_total_weight, 335);
     lv_label_set_text(lbl_total_weight, "Total: 0.00 kg");
+
+    /* ===== NUMERIC KEYPAD (hidden by default) ===== */
+
+    keypad_box_obj = lv_obj_create(left);
+    lv_obj_remove_style_all(keypad_box_obj);
+    lv_obj_set_size(keypad_box_obj, lv_pct(100), 130);
+    lv_obj_clear_flag(keypad_box_obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);  /* hidden until Multiply pressed */
+    keypad_visible = false;
 
     /* Helper to create a keypad button */
     #define KPAD_BTN(parent, x, y, w, h, label_text, font, style, key_id) \
@@ -342,42 +448,33 @@ void home_screen_create(lv_obj_t *parent)
         lv_obj_center(kl); \
     } while(0)
 
-    /* 2-row keypad: 6 buttons per row */
-    const int kw = 90, kh = 50, gap = 8;
-    const int row1_y = 55, row2_y = 55 + kh + 24;
+    /* 2-row keypad: 6 buttons per row, wider buttons for expanded panel */
+    const int kw = 120, kh = 50, gap = 10;
+    const int row1_y = 5, row2_y = 5 + kh + 10;
 
     /* Row 1: [1] [2] [3] [4] [5] [CLR] */
     for(int d = 1; d <= 5; d++) {
         char dl[2] = { (char)('0'+d), 0 };
         int xp = (d - 1) * (kw + gap);
-        KPAD_BTN(keypad_box, xp, row1_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
+        KPAD_BTN(keypad_box_obj, xp, row1_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
     }
-    KPAD_BTN(keypad_box, 5 * (kw + gap), row1_y, kw, kh, "CLR", &lv_font_montserrat_16, &g_styles.btn_danger, -1);
+    KPAD_BTN(keypad_box_obj, 5 * (kw + gap), row1_y, kw, kh, "CLR", &lv_font_montserrat_16, &g_styles.btn_danger, -1);
 
     /* Row 2: [6] [7] [8] [9] [0] [⌫] */
     for(int d = 6; d <= 9; d++) {
         char dl[2] = { (char)('0'+d), 0 };
         int xp = (d - 6) * (kw + gap);
-        KPAD_BTN(keypad_box, xp, row2_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
+        KPAD_BTN(keypad_box_obj, xp, row2_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
     }
-    KPAD_BTN(keypad_box, 4 * (kw + gap), row2_y, kw, kh, "0", &lv_font_montserrat_20, &g_styles.btn_secondary, 0);
-    KPAD_BTN(keypad_box, 5 * (kw + gap), row2_y, kw, kh, LV_SYMBOL_BACKSPACE, &lv_font_montserrat_16, &g_styles.btn_warning, -2);
+    KPAD_BTN(keypad_box_obj, 4 * (kw + gap), row2_y, kw, kh, "0", &lv_font_montserrat_20, &g_styles.btn_secondary, 0);
+    KPAD_BTN(keypad_box_obj, 5 * (kw + gap), row2_y, kw, kh, LV_SYMBOL_BACKSPACE, &lv_font_montserrat_16, &g_styles.btn_warning, -2);
 
     #undef KPAD_BTN
 
-    /* ===== SAVE ===== */
+    /* ===== SAVE BUTTON (fixed height, full width) ===== */
 
-    lv_obj_t *button_row = lv_obj_create(left);
-    lv_obj_remove_style_all(button_row);
-    lv_obj_set_size(button_row, 610, 85);
-    lv_obj_align(button_row, LV_ALIGN_TOP_MID, 0, 390);
-    lv_obj_set_flex_flow(button_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(button_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(button_row, 20, 0);
-
-    /* SAVE button — Vivid Green */
-    lv_obj_t *final_btn = lv_btn_create(button_row);
-    lv_obj_set_size(final_btn, 610, 80);
+    lv_obj_t *final_btn = lv_btn_create(left);
+    lv_obj_set_size(final_btn, lv_pct(100), 75);
     lv_obj_add_style(final_btn, &g_styles.btn_primary, 0);
     lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESET);
     lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESET);
@@ -395,15 +492,15 @@ void home_screen_create(lv_obj_t *parent)
     lv_label_set_text(lbl_final, LV_SYMBOL_SAVE " SAVE");
     lv_obj_center(lbl_final);
 
-    /* ===== RIGHT PANEL - Invoice Items (remaining width) ===== */
+    /* ===== RIGHT PANEL - Items (50% of original width, full height) ===== */
 
     lv_obj_t *right = lv_obj_create(main);
     lv_obj_add_style(right,&g_styles.card,0);
-    lv_obj_set_size(right, DISPLAY_WIDTH - 660, DISPLAY_HEIGHT - 100);
+    lv_obj_set_size(right, 182, DISPLAY_HEIGHT - 100);
     lv_obj_align(right,LV_ALIGN_RIGHT_MID,-5,0);
 
     lv_obj_t *items_title = lv_label_create(right);
-    lv_obj_set_style_text_font(items_title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(items_title, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(items_title, ui_theme_accent(), 0);
     lv_label_set_text(items_title, "ITEMS");
     lv_obj_align(items_title, LV_ALIGN_TOP_MID, 0, 0);
@@ -411,29 +508,30 @@ void home_screen_create(lv_obj_t *parent)
     for(int i=0;i<MAX_INVOICE_ITEMS;i++)
     {
         lv_obj_t *row = lv_obj_create(right);
-        lv_obj_set_size(row, lv_pct(95), 48);
-        lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 40 + i * 52);
+        lv_obj_set_size(row, lv_pct(95), 42);
+        lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 30 + i * 44);
         lv_obj_set_style_bg_color(row, (i % 2 == 0) ? ui_theme_row_even() : ui_theme_row_odd(), 0);
         lv_obj_set_style_radius(row, 6, 0);
         lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_pad_all(row, 4, 0);
+        lv_obj_set_style_pad_all(row, 2, 0);
 
         item_labels[i] = lv_label_create(row);
         lv_obj_set_style_text_color(item_labels[i], ui_theme_text(), 0);
-        lv_obj_set_style_text_font(item_labels[i], &lv_font_montserrat_20, 0);
-        lv_obj_align(item_labels[i], LV_ALIGN_LEFT_MID, 8, 0);
-        lv_obj_set_width(item_labels[i], 260);
+        lv_obj_set_style_text_font(item_labels[i], &lv_font_montserrat_14, 0);
+        lv_label_set_long_mode(item_labels[i], LV_LABEL_LONG_DOT);
+        lv_obj_align(item_labels[i], LV_ALIGN_LEFT_MID, 4, 0);
+        lv_obj_set_width(item_labels[i], 110);
 
         item_delete_btns[i] = lv_btn_create(row);
-        lv_obj_set_size(item_delete_btns[i], 44, 34);
-        lv_obj_align(item_delete_btns[i], LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_obj_set_size(item_delete_btns[i], 34, 28);
+        lv_obj_align(item_delete_btns[i], LV_ALIGN_RIGHT_MID, -2, 0);
         lv_obj_add_style(item_delete_btns[i], &g_styles.btn_danger, 0);
         lv_obj_add_event_cb(item_delete_btns[i], btn_event_cb, LV_EVENT_PRESSED,
                             (void*)(uintptr_t)(UI_EVT_REMOVE_ITEM_BASE + i));
         lv_obj_add_event_cb(item_delete_btns[i], btn_event_cb, LV_EVENT_RELEASED,
                             (void*)(uintptr_t)(UI_EVT_REMOVE_ITEM_BASE + i));
         lv_obj_t *del_lbl = lv_label_create(item_delete_btns[i]);
-        lv_obj_set_style_text_font(del_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(del_lbl, &lv_font_montserrat_14, 0);
         lv_label_set_text(del_lbl, LV_SYMBOL_TRASH);
         lv_obj_center(del_lbl);
         lv_obj_add_flag(item_delete_btns[i], LV_OBJ_FLAG_HIDDEN);
@@ -445,6 +543,12 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(version_label, ui_theme_muted(), 0);
     lv_obj_set_style_text_font(version_label, &lv_font_montserrat_14, 0);
     lv_label_set_text(version_label, "v0.0.0");
+
+    home_screen_refresh_clock();
+    clock_timer = lv_timer_create([](lv_timer_t *t){
+        (void)t;
+        home_screen_refresh_clock();
+    }, 1000, NULL);
 
 }
 
@@ -461,6 +565,12 @@ void home_screen_set_sync_status(const char *txt)
 {
     if(lbl_sync && lv_obj_is_valid(lbl_sync))
         lv_label_set_text(lbl_sync,txt);
+}
+
+void home_screen_set_clock_text(const char *txt)
+{
+    if(lbl_clock && lv_obj_is_valid(lbl_clock))
+        lv_label_set_text(lbl_clock, txt ? txt : "--:--");
 }
 
 void home_screen_refresh_invoice_details(void)
@@ -507,6 +617,11 @@ void home_screen_set_weight(float w)
 {
     if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) return;
 
+    /* Dismiss save popup when new weight is detected from HX711 */
+    if(w > 0.1f && save_popup) {
+        home_screen_dismiss_save_popup();
+    }
+
     snprintf(g_format_buf, sizeof(g_format_buf), "%.1f", w);
     lv_label_set_text(lbl_weight, g_format_buf);
 }
@@ -529,7 +644,7 @@ void home_screen_set_invoice(uint32_t id)
 {
     if(!lbl_invoice || !lv_obj_is_valid(lbl_invoice)) return;
 
-    snprintf(g_format_buf, sizeof(g_format_buf), "Invoice #%lu", id);
+    snprintf(g_format_buf, sizeof(g_format_buf), "S/N #%lu", id);
     lv_label_set_text(lbl_invoice, g_format_buf);
 }
 
@@ -540,6 +655,80 @@ void home_screen_set_version(const char *ver)
         snprintf(g_format_buf, sizeof(g_format_buf), "v%s", ver);
         lv_label_set_text(version_label, g_format_buf);
     }
+}
+
+void home_screen_dismiss_save_popup(void)
+{
+    if(save_popup_timer) {
+        lv_timer_del(save_popup_timer);
+        save_popup_timer = NULL;
+    }
+    if(save_popup && lv_obj_is_valid(save_popup)) {
+        lv_obj_del(save_popup);
+    }
+    save_popup = NULL;
+}
+
+static void save_popup_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    home_screen_dismiss_save_popup();
+}
+
+void home_screen_show_save_popup(uint32_t serial_num)
+{
+    home_screen_dismiss_save_popup();
+
+    lv_obj_t *scr = lv_scr_act();
+
+    /* Semi-transparent overlay */
+    save_popup = lv_obj_create(scr);
+    lv_obj_remove_style_all(save_popup);
+    lv_obj_set_size(save_popup, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_obj_set_style_bg_color(save_popup, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(save_popup, LV_OPA_50, 0);
+    lv_obj_align(save_popup, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(save_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Popup card */
+    lv_obj_t *card = lv_obj_create(save_popup);
+    lv_obj_set_size(card, 420, 220);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x1E293B), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(0x4ADE80), 0);
+    lv_obj_set_style_shadow_width(card, 20, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_hex(0x22C55E), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Check mark / Saved label */
+    lv_obj_t *check_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(check_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(check_lbl, lv_color_hex(0x4ADE80), 0);
+    lv_label_set_text(check_lbl, LV_SYMBOL_OK " Saved!");
+    lv_obj_align(check_lbl, LV_ALIGN_TOP_MID, 0, 30);
+
+    /* Next Serial Number */
+    lv_obj_t *sn_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(sn_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(sn_lbl, lv_color_hex(0xFFFFFF), 0);
+    snprintf(g_format_buf, sizeof(g_format_buf), "Next S/N: #%lu", serial_num);
+    lv_label_set_text(sn_lbl, g_format_buf);
+    lv_obj_align(sn_lbl, LV_ALIGN_CENTER, 0, 10);
+
+    /* Hint text */
+    lv_obj_t *hint_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(hint_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(hint_lbl, lv_color_hex(0x94A3B8), 0);
+    lv_label_set_text(hint_lbl, "Place weight to dismiss");
+    lv_obj_align(hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -20);
+
+    /* Auto-dismiss after 60 seconds */
+    save_popup_timer = lv_timer_create(save_popup_timer_cb, 60000, NULL);
+    lv_timer_set_repeat_count(save_popup_timer, 1);
 }
 
 #ifdef __cplusplus

@@ -20,9 +20,13 @@ void home_screen_set_quantity(int qty);
 void home_screen_set_invoice(uint32_t id);
 void home_screen_set_device(const char *name);
 void home_screen_set_sync_status(const char *txt);
+void home_screen_set_clock_text(const char *txt);
 
 void home_screen_refresh_invoice_details(void);
 void home_screen_set_version(const char *ver);
+
+void home_screen_show_save_popup(uint32_t serial_num);
+void home_screen_dismiss_save_popup(void);
 
 }  // extern "C"
 
@@ -37,8 +41,11 @@ void home_screen_set_quantity(int qty);
 void home_screen_set_invoice(uint32_t id);
 void home_screen_set_device(const char *name);
 void home_screen_set_sync_status(const char *txt);
+void home_screen_set_clock_text(const char *txt);
 void home_screen_refresh_invoice_details(void);
 void home_screen_set_version(const char *ver);
+void home_screen_show_save_popup(uint32_t serial_num);
+void home_screen_dismiss_save_popup(void);
 
 }  // extern "C"
 

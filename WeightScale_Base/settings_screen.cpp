@@ -6,6 +6,7 @@
 #endif
 
 #include "config/app_config.h"
+#include "app/app_controller.h"
 #include "settings_screen.h"
 #include "ui_styles.h"
 #include "wifi_service.h"
@@ -15,6 +16,8 @@
 #include "device_name_screen.h"
 #include "devlog.h"
 #include "sync_service.h"
+#include <stdio.h>
+#include <string.h>
 
 extern void wifi_password_popup_show(const char *ssid);
 
@@ -38,6 +41,16 @@ static lv_obj_t *device_id_label = NULL;
 static lv_obj_t *offset_lbl = NULL;
 static lv_obj_t *env_mode_sw = NULL;
 static lv_obj_t *env_mode_lbl = NULL;
+static lv_obj_t *time_label = NULL;
+static lv_timer_t *time_refresh_timer = NULL;
+
+static void settings_screen_refresh_time_label()
+{
+    if(!time_label || !lv_obj_is_valid(time_label)) return;
+    char buf[32];
+    app_controller_get_time_text(buf, sizeof(buf));
+    lv_label_set_text(time_label, buf);
+}
 /* WiFi state change callback */
 static void wifi_state_cb(wifi_state_t s)
 {
@@ -237,6 +250,157 @@ static void clear_logs_cb(lv_event_t *e)
     devlog_printf("[SETTINGS] Logs cleared by user");
 }
 
+static void clear_all_confirm_cb(lv_event_t *e)
+{
+    lv_obj_t *overlay = (lv_obj_t *)lv_event_get_user_data(e);
+    app_controller_clear_all_data();
+    if(overlay && lv_obj_is_valid(overlay))
+        lv_obj_del(overlay);
+}
+
+static void show_clear_all_confirm_popup(void)
+{
+    lv_obj_t *overlay = lv_obj_create(settings_scr_ref ? settings_scr_ref : lv_scr_act());
+    lv_obj_remove_style_all(overlay);
+    lv_obj_set_size(overlay, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_60, 0);
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *card = lv_obj_create(overlay);
+    lv_obj_set_size(card, 460, 220);
+    lv_obj_center(card);
+    lv_obj_add_style(card, &g_styles.card, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(card);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xF97316), 0);
+    lv_label_set_text(title, LV_SYMBOL_WARNING " Clear all data?");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+
+    lv_obj_t *msg = lv_label_create(card);
+    lv_obj_set_style_text_font(msg, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(msg, ui_theme_text(), 0);
+    lv_label_set_text(msg, "This will reset invoice number and erase all saved records.");
+    lv_obj_set_width(msg, 400);
+    lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(msg, LV_ALIGN_CENTER, 0, -10);
+
+    lv_obj_t *cancel_btn = lv_btn_create(card);
+    lv_obj_add_style(cancel_btn, &g_styles.btn_secondary, 0);
+    lv_obj_set_size(cancel_btn, 150, 60);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 35, -20);
+    lv_obj_add_event_cb(cancel_btn, [](lv_event_t *e){
+        lv_obj_t *ov = (lv_obj_t *)lv_event_get_user_data(e);
+        if(ov && lv_obj_is_valid(ov)) lv_obj_del(ov);
+    }, LV_EVENT_RELEASED, overlay);
+    lv_label_set_text(lv_label_create(cancel_btn), "Cancel");
+
+    lv_obj_t *confirm_btn = lv_btn_create(card);
+    lv_obj_add_style(confirm_btn, &g_styles.btn_danger, 0);
+    lv_obj_set_size(confirm_btn, 150, 60);
+    lv_obj_align(confirm_btn, LV_ALIGN_BOTTOM_RIGHT, -35, -20);
+    lv_obj_add_event_cb(confirm_btn, clear_all_confirm_cb, LV_EVENT_RELEASED, overlay);
+    lv_label_set_text(lv_label_create(confirm_btn), LV_SYMBOL_TRASH " Clear");
+}
+
+static void show_set_time_popup(void)
+{
+    lv_obj_t *overlay = lv_obj_create(settings_scr_ref ? settings_scr_ref : lv_scr_act());
+    lv_obj_remove_style_all(overlay);
+    lv_obj_set_size(overlay, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_70, 0);
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *card = lv_obj_create(overlay);
+    lv_obj_set_size(card, 560, 470);
+    lv_obj_center(card);
+    lv_obj_add_style(card, &g_styles.card, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(card);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, ui_theme_accent(), 0);
+    lv_label_set_text(title, LV_SYMBOL_EDIT " Set Date & Time");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+
+    lv_obj_t *hint = lv_label_create(card);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(hint, ui_theme_muted(), 0);
+    lv_label_set_text(hint, "Enter 12 digits: YYYYMMDDHHMM");
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 60);
+
+    lv_obj_t *ta = lv_textarea_create(card);
+    lv_obj_set_size(ta, 470, 65);
+    lv_obj_align(ta, LV_ALIGN_TOP_MID, 0, 95);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, 12);
+    lv_textarea_set_placeholder_text(ta, "202604141200");
+    lv_obj_set_style_text_font(ta, &lv_font_montserrat_28, 0);
+    {
+        char current_time[32];
+        app_controller_get_time_text(current_time, sizeof(current_time));
+        if(strcmp(current_time, "Time not set") != 0) {
+            int year = 0, month = 0, day = 0, hour = 0, minute = 0;
+            if(sscanf(current_time, "%d-%d-%d %d:%d",
+                      &year, &month, &day, &hour, &minute) == 5) {
+                char compact[16];
+                snprintf(compact, sizeof(compact), "%04d%02d%02d%02d%02d",
+                         year, month, day, hour, minute);
+                lv_textarea_set_text(ta, compact);
+            }
+        }
+    }
+
+    lv_obj_t *err_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(err_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(err_lbl, lv_color_hex(0xEF4444), 0);
+    lv_label_set_text(err_lbl, "");
+    lv_obj_align(err_lbl, LV_ALIGN_TOP_MID, 0, 170);
+
+    struct time_popup_ctx {
+        lv_obj_t *overlay;
+        lv_obj_t *ta;
+        lv_obj_t *err_lbl;
+    };
+    time_popup_ctx *ctx = new time_popup_ctx{overlay, ta, err_lbl};
+
+    lv_obj_t *kb = lv_keyboard_create(card);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+    lv_keyboard_set_textarea(kb, ta);
+    lv_obj_set_size(kb, 520, 220);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_style(kb, &g_styles.kb_bg, LV_PART_MAIN);
+    lv_obj_add_style(kb, &g_styles.kb_btn, LV_PART_ITEMS);
+
+    lv_obj_add_event_cb(kb, [](lv_event_t *e){
+        time_popup_ctx *c = (time_popup_ctx *)lv_event_get_user_data(e);
+        if(!c) return;
+        const char *text = lv_textarea_get_text(c->ta);
+        int year = 0, month = 0, day = 0, hour = 0, minute = 0;
+        if(strlen(text) == 12 &&
+           sscanf(text, "%4d%2d%2d%2d%2d", &year, &month, &day, &hour, &minute) == 5 &&
+           app_controller_set_datetime(year, month, day, hour, minute)) {
+            settings_screen_refresh_time_label();
+            lv_obj_t *ov = c->overlay;
+            delete c;
+            lv_obj_del(ov);
+            return;
+        }
+        lv_label_set_text(c->err_lbl, "Invalid date/time. Use 12 digits: YYYYMMDDHHMM");
+    }, LV_EVENT_READY, ctx);
+
+    lv_obj_add_event_cb(kb, [](lv_event_t *e){
+        time_popup_ctx *c = (time_popup_ctx *)lv_event_get_user_data(e);
+        if(!c) return;
+        lv_obj_t *ov = c->overlay;
+        delete c;
+        lv_obj_del(ov);
+    }, LV_EVENT_CANCEL, ctx);
+}
+
 #if ENABLE_CLOUD_SYNC
 static void sync_env_changed(lv_event_t *e)
 {
@@ -280,6 +444,7 @@ void settings_screen_create(lv_obj_t *parent)
         theme_sw = NULL;
         env_mode_sw = NULL;
         env_mode_lbl = NULL;
+        time_label = NULL;
         wifi_list_scr = NULL;
         offset_lbl = NULL;
         ota_overlay = NULL;
@@ -287,6 +452,7 @@ void settings_screen_create(lv_obj_t *parent)
         ota_overlay_bar = NULL;
         ota_overlay_pct = NULL;
         if(devlog_timer) { lv_timer_del(devlog_timer); devlog_timer = NULL; }
+        if(time_refresh_timer) { lv_timer_del(time_refresh_timer); time_refresh_timer = NULL; }
     }, LV_EVENT_DELETE, NULL);
 
     lv_obj_add_style(parent, &g_styles.screen, 0);
@@ -555,11 +721,49 @@ lv_timer_create([](lv_timer_t *t){
         if(back_cb) back_cb();
     }, LV_EVENT_VALUE_CHANGED, NULL);
 
+    /* --- Time row: current time | set time | clear all --- */
+    lv_obj_t *time_row = lv_obj_create(card);
+    lv_obj_remove_style_all(time_row);
+    lv_obj_set_size(time_row, lv_pct(100), 75);
+    lv_obj_align(time_row, LV_ALIGN_TOP_LEFT, 0, 330);
+    lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(time_row, 14, 0);
+    lv_obj_set_style_pad_left(time_row, 10, 0);
+
+    lv_obj_t *time_title = lv_label_create(time_row);
+    lv_obj_set_style_text_font(time_title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(time_title, ui_theme_text(), 0);
+    lv_label_set_text(time_title, LV_SYMBOL_BELL " Time");
+
+    time_label = lv_label_create(time_row);
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(time_label, ui_theme_accent(), 0);
+    settings_screen_refresh_time_label();
+
+    lv_obj_t *set_time_btn = lv_btn_create(time_row);
+    lv_obj_add_style(set_time_btn, &g_styles.btn_primary, 0);
+    lv_obj_set_size(set_time_btn, 190, 60);
+    lv_obj_add_event_cb(set_time_btn, [](lv_event_t *e){
+        (void)e;
+        show_set_time_popup();
+    }, LV_EVENT_RELEASED, NULL);
+    lv_label_set_text(lv_label_create(set_time_btn), LV_SYMBOL_EDIT " Set Time");
+
+    lv_obj_t *clear_all_btn = lv_btn_create(time_row);
+    lv_obj_add_style(clear_all_btn, &g_styles.btn_danger, 0);
+    lv_obj_set_size(clear_all_btn, 210, 60);
+    lv_obj_add_event_cb(clear_all_btn, [](lv_event_t *e){
+        (void)e;
+        show_clear_all_confirm_popup();
+    }, LV_EVENT_RELEASED, NULL);
+    lv_label_set_text(lv_label_create(clear_all_btn), LV_SYMBOL_TRASH " Clear All");
+
     /* --- Sync environment row: Dev/Prod API toggle --- */
     lv_obj_t *sync_env_row = lv_obj_create(card);
     lv_obj_remove_style_all(sync_env_row);
     lv_obj_set_size(sync_env_row, lv_pct(100), 75);
-    lv_obj_align(sync_env_row, LV_ALIGN_TOP_LEFT, 0, 330);
+    lv_obj_align(sync_env_row, LV_ALIGN_TOP_LEFT, 0, 405);
     lv_obj_set_flex_flow(sync_env_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(sync_env_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(sync_env_row, 20, 0);
@@ -597,7 +801,7 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_t *btn_row2 = lv_obj_create(card);
     lv_obj_remove_style_all(btn_row2);
     lv_obj_set_size(btn_row2, lv_pct(100), 75);
-    lv_obj_align(btn_row2, LV_ALIGN_TOP_LEFT, 0, 405);
+    lv_obj_align(btn_row2, LV_ALIGN_TOP_LEFT, 0, 480);
     lv_obj_set_flex_flow(btn_row2, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_row2, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(btn_row2, 20, 0);
@@ -662,7 +866,7 @@ lv_timer_create([](lv_timer_t *t){
     lv_obj_t *offset_row = lv_obj_create(card);
     lv_obj_remove_style_all(offset_row);
     lv_obj_set_size(offset_row, lv_pct(100), 75);
-    lv_obj_align(offset_row, LV_ALIGN_TOP_LEFT, 0, 480);
+    lv_obj_align(offset_row, LV_ALIGN_TOP_LEFT, 0, 555);
     lv_obj_set_flex_flow(offset_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(offset_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(offset_row, 12, 0);
@@ -755,7 +959,7 @@ lv_timer_create([](lv_timer_t *t){
     /* Log textarea */
     dev_log_ta = lv_textarea_create(card);
     lv_obj_set_size(dev_log_ta, lv_pct(95), 130);
-    lv_obj_align(dev_log_ta, LV_ALIGN_TOP_MID, 0, 565);
+    lv_obj_align(dev_log_ta, LV_ALIGN_TOP_MID, 0, 640);
     lv_obj_set_style_bg_color(dev_log_ta, ui_theme_surface(), 0);
     lv_obj_set_style_bg_opa(dev_log_ta, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(dev_log_ta, ui_theme_muted(), 0);
@@ -780,6 +984,12 @@ lv_timer_create([](lv_timer_t *t){
 
     /* Set correct WiFi status immediately (may already be connected) */
     settings_screen_update_wifi_status();
+
+    settings_screen_refresh_time_label();
+    time_refresh_timer = lv_timer_create([](lv_timer_t *t){
+        (void)t;
+        settings_screen_refresh_time_label();
+    }, 1000, NULL);
 }
 
 /* ================= STATUS UPDATE ================= */

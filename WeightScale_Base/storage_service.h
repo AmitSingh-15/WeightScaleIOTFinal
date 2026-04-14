@@ -12,6 +12,8 @@ void storage_load_invoice(uint32_t *id);
 /* Day tracking */
 void storage_save_last_day(uint32_t day);
 uint32_t storage_load_last_day(void);
+void storage_save_last_auto_clear_day(uint32_t day);
+uint32_t storage_load_last_auto_clear_day(void);
 
 /* Offline queue */
 bool storage_enqueue_record(const invoice_record_t *rec);

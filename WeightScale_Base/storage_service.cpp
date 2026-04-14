@@ -31,6 +31,16 @@ uint32_t storage_load_last_day(void)
     return prefs.getUInt("last_day", 0);
 }
 
+void storage_save_last_auto_clear_day(uint32_t day)
+{
+    prefs.putUInt("auto_clr_day", day);
+}
+
+uint32_t storage_load_last_auto_clear_day(void)
+{
+    return prefs.getUInt("auto_clr_day", 0);
+}
+
 /*
  * Offline queue hook
  * STEP-4 will attach Wi-Fi + sync

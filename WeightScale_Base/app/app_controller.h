@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "app_config.h"
 
 #ifdef __cplusplus
@@ -134,6 +135,9 @@ bool app_controller_is_test_mode(void);
 /* Manual weight offset: +/- kg applied to non-zero readings */
 void app_controller_set_manual_offset(float offset_kg);
 float app_controller_get_manual_offset(void);
+void app_controller_clear_all_data(void);
+bool app_controller_set_datetime(int year, int month, int day, int hour, int minute);
+void app_controller_get_time_text(char *out, size_t max);
 
 #ifdef __cplusplus
 }

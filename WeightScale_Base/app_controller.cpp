@@ -28,6 +28,7 @@
 // Conditionally available based on app_config.h
 #if ENABLE_WIFI_SERVICE
   #include "wifi_service.h"
+  #include "wifi_ota_task.h"
   #include "wifi_list_screen.h"
   #include "ota_service.h"
 #endif
@@ -88,6 +89,18 @@ static void app_controller_run_midnight_clear_check(void);
 
 #if ENABLE_WIFI_SERVICE
 static bool g_wifi_connected = false;
+
+typedef enum {
+    WIFI_STATE_IDLE,
+    WIFI_STATE_CONNECTING,
+    WIFI_STATE_CONNECTED,
+    WIFI_STATE_STABLE,
+    WIFI_STATE_FAILED
+} wifi_state_ex_t;
+
+static wifi_state_ex_t g_wifi_state = WIFI_STATE_IDLE;
+static unsigned long g_wifi_connected_time = 0;
+static bool g_network_busy = false;
 #endif
 
 /* ========================================================
@@ -150,28 +163,45 @@ void app_controller_init(void)
         devlog_printf("[CTRL] Heap before WiFi: %lu free, %lu largest",
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        wifi_service_init();
-        devlog_printf("[CTRL] Heap after WiFi: %lu free, %lu largest",
+        /* ⭐ NEW: Initialize Core 1 WiFi/OTA task instead of direct WiFi service */
+        wifi_ota_task_init();
+        devlog_printf("[CTRL] Heap after WiFi task: %lu free, %lu largest",
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         // Register our internal WiFi callback
-        wifi_service_register_state_callback([](wifi_state_t state) {
+        wifi_ota_task_register_state_callback([](wifi_state_t state) {
+
             g_wifi_connected = (state == WIFI_CONNECTED);
-            const char *status;
+
             if(state == WIFI_CONNECTED) {
-                status = "Online";
+                g_wifi_state = WIFI_STATE_CONNECTED;
+                g_wifi_connected_time = millis();
+
                 time_service_request_ntp_sync();
                 devlog_printf("[CTRL] NTP sync requested (WiFi online)");
             }
+            else if(state == WIFI_CONNECTING) {
+                g_wifi_state = WIFI_STATE_CONNECTING;
+            }
+            else {
+                g_wifi_state = WIFI_STATE_FAILED;
+            }
+
+            const char *status;
+            if(state == WIFI_CONNECTED) status = "Online";
             else if(state == WIFI_CONNECTING) status = "Connecting...";
-            else                              status = "Offline";
+            else status = "Offline";
+
             home_screen_set_sync_status(status);
+
             if (g_sync_status_cb) {
                 g_sync_status_cb(status);
             }
+
             devlog_printf("[CTRL] WiFi state: %s", status);
         });
-        devlog_printf("[CTRL] ✓ WiFi service initialized");
+
+        devlog_printf("[CTRL] ✓ WiFi task initialized on Core 1");
     } else {
         devlog_printf("[CTRL] ⊘ WiFi skipped (crash loop protection)");
         home_screen_set_sync_status("Safe Mode");
@@ -221,7 +251,13 @@ void app_controller_init(void)
 void app_controller_loop(void)
 {
     if (!g_initialized) return;
-
+    // ===== WIFI STABILITY CHECK =====
+    if (g_wifi_state == WIFI_STATE_CONNECTED) {
+        if (millis() - g_wifi_connected_time > 15000) {
+            g_wifi_state = WIFI_STATE_STABLE;
+            devlog_printf("[WIFI] Connection STABLE");
+        }
+    }
     /* Clear crash counter after 30s of stable running */
     if (!g_crash_counter_cleared && millis() > 30000) {
         g_crash_counter_cleared = true;
@@ -232,13 +268,12 @@ void app_controller_loop(void)
         devlog_printf("[CTRL] Crash counter cleared (stable boot)");
     }
 
-#if ENABLE_WIFI_SERVICE
-    if (g_wifi_safe) wifi_service_loop();
-#endif
-
 #if ENABLE_CLOUD_SYNC
-    if (g_wifi_safe) sync_service_loop();
+if (g_wifi_safe && g_wifi_state == WIFI_STATE_STABLE && !g_network_busy) {
+    sync_service_loop();
+}
 #endif
+    /* ⭐ REMOVED: wifi_service_loop() — now runs on Core 1 task */
 
     app_controller_run_midnight_clear_check();
 
@@ -782,15 +817,16 @@ void app_controller_handle_ui_event(int event_id)
         case UI_EVT_RESET:
         {
             uint8_t cnt = invoice_session_count();
+            uint32_t saved_id = invoice_service_current_id();
             devlog_printf("[CTRL] → Finalize S/N #%lu (%u items)",
-                          invoice_service_current_id(), cnt);
+                          saved_id, cnt);
             if (cnt > 0) {
                 invoice_session_commit();
                 invoice_service_next();
                 uint32_t next_id = invoice_service_current_id();
                 devlog_printf("[CTRL] Saved. Next S/N #%lu", next_id);
                 /* Show popup with next serial number */
-                home_screen_show_save_popup(next_id);
+                home_screen_show_save_popup(saved_id);
             } else {
                 devlog_printf("[CTRL] No items to finalize");
             }
@@ -957,7 +993,23 @@ void app_controller_start_wifi_scan(void)
 
 void app_controller_connect_wifi(const char *ssid, const char *password)
 {
-    devlog_printf("[CTRL] Connect WiFi: %s", ssid);
+    if (!ssid || strlen(ssid) == 0) {
+        devlog_printf("[WIFI] ERROR: SSID empty");
+        return;
+    }
+
+    if (!password || strlen(password) < 8) {
+        devlog_printf("[WIFI] ERROR: Invalid password");
+        home_screen_set_sync_status("Invalid Password");
+        return;
+    }
+
+    if (g_network_busy) {
+        devlog_printf("[WIFI] Busy, skipping connect");
+        return;
+    }
+
+    devlog_printf("[WIFI] Connecting to: %s", ssid);
     wifi_service_connect(ssid, password);
 }
 

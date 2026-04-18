@@ -10,6 +10,7 @@
 #include "config/app_config.h"
 #include "wifi_list_screen.h"
 #include "wifi_service.h"
+#include "wifi_ota_task.h"  /* ⭐ NEW: Use Core 1 task API */
 #include "storage_service.h"
 #include "ui_styles.h"
 
@@ -22,20 +23,45 @@ static lv_obj_t *list;
 static lv_timer_t *scan_poll_timer = NULL;
 static void (*back_cb)(void) = NULL;
 static void (*select_cb)(const char*) = NULL;
-static char saved_ssid_store[33];
-static char saved_pwd_store[65];
 static void scan_poll_cb(lv_timer_t *t);
 
 /* Static SSID storage — avoids strdup/free heap fragmentation */
 #define MAX_SCAN_APS 20
 static char ssid_store[MAX_SCAN_APS][33];
 
+/* Saved network storage for per-row callbacks */
+#define MAX_SAVED_ROWS WIFI_MAX_SAVED
+static char saved_ssid_rows[MAX_SAVED_ROWS][33];
+static char saved_pwd_rows[MAX_SAVED_ROWS][65];
+static char forget_target_ssid[33];  /* SSID pending forget confirmation */
+
 static void ssid_clicked(lv_event_t *e)
 {
-    if(!select_cb) return;
     uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
-    if(idx < MAX_SCAN_APS)
-        select_cb(ssid_store[idx]);
+    if(idx >= MAX_SCAN_APS) return;
+
+    /* If we have a saved password for this SSID, connect directly */
+    char saved_pwd[65] = {0};
+    if(storage_find_wifi_password(ssid_store[idx], saved_pwd, sizeof(saved_pwd))) {
+        /* ⭐ NEW: Use Core 1 task API to enqueue connect command */
+        uint8_t ssid_len = strlen(ssid_store[idx]);
+        uint8_t pwd_len = strlen(saved_pwd);
+        uint8_t payload[2 + 33 + 65];  /* len_ssid + len_pwd + ssid + pwd */
+        payload[0] = ssid_len;
+        payload[1] = pwd_len;
+        memcpy(&payload[2], ssid_store[idx], ssid_len);
+        memcpy(&payload[2 + ssid_len], saved_pwd, pwd_len);
+        
+        wifi_ota_task_enqueue(WIFI_TASK_CMD_CONNECT, payload, 2 + ssid_len + pwd_len);
+        
+        wifi_list_screen_refresh();
+        if(scan_poll_timer) lv_timer_del(scan_poll_timer);
+        scan_poll_timer = lv_timer_create(scan_poll_cb, 500, NULL);
+        return;
+    }
+
+    /* No saved password — show password popup */
+    if(select_cb) select_cb(ssid_store[idx]);
 }
 
 void wifi_list_screen_register_back(void (*cb)(void)) { back_cb = cb; }
@@ -53,8 +79,20 @@ static void back_evt(lv_event_t *e)
 
 static void saved_connect_clicked(lv_event_t *e)
 {
-    if(saved_ssid_store[0] == 0) return;
-    wifi_service_connect(saved_ssid_store, saved_pwd_store);
+    uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
+    if(idx >= MAX_SAVED_ROWS || saved_ssid_rows[idx][0] == 0) return;
+    
+    /* ⭐ NEW: Use Core 1 task API to enqueue connect command */
+    uint8_t ssid_len = strlen(saved_ssid_rows[idx]);
+    uint8_t pwd_len = strlen(saved_pwd_rows[idx]);
+    uint8_t payload[2 + 33 + 65];
+    payload[0] = ssid_len;
+    payload[1] = pwd_len;
+    memcpy(&payload[2], saved_ssid_rows[idx], ssid_len);
+    memcpy(&payload[2 + ssid_len], saved_pwd_rows[idx], pwd_len);
+    
+    wifi_ota_task_enqueue(WIFI_TASK_CMD_CONNECT, payload, 2 + ssid_len + pwd_len);
+    
     wifi_list_screen_refresh();
     if(scan_poll_timer) lv_timer_del(scan_poll_timer);
     scan_poll_timer = lv_timer_create(scan_poll_cb, 500, NULL);
@@ -101,10 +139,17 @@ static lv_obj_t *forget_overlay = NULL;
 
 static void forget_confirm_cb(lv_event_t *e)
 {
-    storage_forget_wifi_credentials();
-    wifi_service_disconnect();
+    /* Forget only the targeted SSID */
+    String conn = wifi_service_get_connected_ssid();
+    storage_forget_wifi_ssid(forget_target_ssid);
+
+    /* If we just forgot the currently connected network, disconnect */
+    if(conn.length() > 0 && conn == forget_target_ssid) {
+        wifi_service_disconnect();
+    }
+
     if(forget_overlay) { lv_obj_del(forget_overlay); forget_overlay = NULL; }
-    wifi_list_screen_refresh();            /* redraw list without saved row */
+    wifi_list_screen_refresh();
 }
 
 static void forget_cancel_cb(lv_event_t *e)
@@ -114,6 +159,13 @@ static void forget_cancel_cb(lv_event_t *e)
 
 static void forget_clicked(lv_event_t *e)
 {
+    /* Capture which saved SSID to forget */
+    uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
+    if(idx < MAX_SAVED_ROWS && saved_ssid_rows[idx][0]) {
+        strncpy(forget_target_ssid, saved_ssid_rows[idx], sizeof(forget_target_ssid) - 1);
+        forget_target_ssid[sizeof(forget_target_ssid) - 1] = 0;
+    }
+
     /* Dim overlay */
     forget_overlay = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(forget_overlay);
@@ -132,7 +184,8 @@ static void forget_clicked(lv_event_t *e)
     lv_obj_t *msg = lv_label_create(card);
     lv_obj_set_style_text_font(msg, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(msg, COLOR_TEXT, 0);
-    lv_label_set_text(msg, "Forget saved WiFi network?");
+    String prompt = "Forget \"" + String(forget_target_ssid) + "\"?";
+    lv_label_set_text(msg, prompt.c_str());
     lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 20);
 
     lv_obj_t *yes = lv_btn_create(card);
@@ -160,83 +213,91 @@ void wifi_list_screen_refresh(void)
 {
     lv_obj_clean(list);
 
-    /* ── Saved network row ── */
-    char saved_ssid[33] = {0};
-    char saved_pwd[65]  = {0};
-    if(storage_load_wifi_credentials(saved_ssid, sizeof(saved_ssid),
-                                     saved_pwd, sizeof(saved_pwd)))
-    {
-        strncpy(saved_ssid_store, saved_ssid, sizeof(saved_ssid_store) - 1);
-        saved_ssid_store[sizeof(saved_ssid_store) - 1] = 0;
-        strncpy(saved_pwd_store, saved_pwd, sizeof(saved_pwd_store) - 1);
-        saved_pwd_store[sizeof(saved_pwd_store) - 1] = 0;
+    /* ⭐ UPDATED: Use Core 1 task API */
+    wifi_state_t ws = wifi_ota_task_get_state();
+    String conn_ssid = wifi_service_get_connected_ssid();
 
-        /* Section header */
+    /* ── Saved networks section ── */
+    uint8_t saved_cnt = storage_get_wifi_count();
+
+    /* Cache all saved networks for per-row callbacks */
+    for(uint8_t i = 0; i < MAX_SAVED_ROWS; i++) {
+        saved_ssid_rows[i][0] = 0;
+        saved_pwd_rows[i][0] = 0;
+    }
+    for(uint8_t i = 0; i < saved_cnt && i < MAX_SAVED_ROWS; i++) {
+        storage_get_wifi_at(i, saved_ssid_rows[i], sizeof(saved_ssid_rows[i]),
+                            saved_pwd_rows[i], sizeof(saved_pwd_rows[i]));
+    }
+
+    if(saved_cnt > 0)
+    {
         lv_obj_t *sec = lv_label_create(list);
         lv_obj_set_style_text_font(sec, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(sec, COLOR_MUTED, 0);
-        lv_label_set_text(sec, "SAVED NETWORK");
+        lv_label_set_text(sec, saved_cnt == 1 ? "SAVED NETWORK" : "SAVED NETWORKS");
         lv_obj_set_style_pad_top(sec, 8, 0);
         lv_obj_set_style_pad_bottom(sec, 2, 0);
 
-        /* Row container */
-        lv_obj_t *row = lv_obj_create(list);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, lv_pct(100), 60);
-        lv_obj_set_style_bg_color(row, ui_theme_row_even(), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(row, 8, 0);
-        lv_obj_set_style_pad_all(row, 8, 0);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        for(uint8_t si = 0; si < saved_cnt; si++)
+        {
+            char s_ssid[33] = {0}, s_pwd[65] = {0};
+            if(!storage_get_wifi_at(si, s_ssid, sizeof(s_ssid), s_pwd, sizeof(s_pwd)))
+                continue;
 
-        /* SSID + status */
-        wifi_state_t ws = wifi_service_state();
-        const char *status_icon = (ws == WIFI_CONNECTED) ? LV_SYMBOL_WIFI : LV_SYMBOL_WARNING;
-        const char *status_txt  = (ws == WIFI_CONNECTED) ? " Connected"
-                                : (ws == WIFI_CONNECTING) ? " Connecting..."
-                                : " Saved";
-        lv_obj_t *lbl = lv_label_create(row);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(lbl, COLOR_TEXT, 0);
-        lv_obj_set_flex_grow(lbl, 1);
-        String display_str = String(status_icon) + " " + saved_ssid + status_txt;
-        lv_label_set_text(lbl, display_str.c_str());
+            lv_obj_t *row = lv_obj_create(list);
+            lv_obj_remove_style_all(row);
+            lv_obj_set_size(row, lv_pct(100), 56);
+            lv_obj_set_style_bg_color(row, (si % 2 == 0) ? ui_theme_row_even() : ui_theme_row_odd(), 0);
+            lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+            lv_obj_set_style_radius(row, 8, 0);
+            lv_obj_set_style_pad_all(row, 6, 0);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-        /* Button row */
-        lv_obj_t *btn_row = lv_obj_create(row);
-        lv_obj_remove_style_all(btn_row);
-        lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_all(btn_row, 0, 0);
-        lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            /* Status for this specific SSID */
+            bool is_connected = (ws == WIFI_CONNECTED && conn_ssid == s_ssid);
+            bool is_connecting = (ws == WIFI_CONNECTING);
 
-        if(ws != WIFI_CONNECTED) {
-            lv_obj_t *cbtn = lv_btn_create(btn_row);
-            lv_obj_add_style(cbtn, &g_styles.btn_primary, 0);
-            lv_obj_set_size(cbtn, 130, 44);
-            lv_obj_t *clbl = lv_label_create(cbtn);
-            lv_obj_set_style_text_font(clbl, &lv_font_montserrat_16, 0);
-            lv_label_set_text(clbl, LV_SYMBOL_WIFI " CONNECT");
-            lv_obj_center(clbl);
-            lv_obj_add_event_cb(cbtn, saved_connect_clicked, LV_EVENT_RELEASED, NULL);
+            const char *icon = is_connected ? LV_SYMBOL_WIFI : LV_SYMBOL_WARNING;
+            const char *status = is_connected ? " Connected"
+                               : is_connecting ? " Connecting..."
+                               : "";
+
+            lv_obj_t *lbl = lv_label_create(row);
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_color(lbl, COLOR_TEXT, 0);
+            String display = String(icon) + " " + s_ssid + status;
+            lv_label_set_text(lbl, display.c_str());
+            lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
+
+            /* Forget button (always shown) */
+            lv_obj_t *fbtn = lv_btn_create(row);
+            lv_obj_add_style(fbtn, &g_styles.btn_danger, 0);
+            lv_obj_set_size(fbtn, 100, 40);
+            lv_obj_align(fbtn, LV_ALIGN_RIGHT_MID, -4, 0);
+            lv_obj_t *flbl = lv_label_create(fbtn);
+            lv_obj_set_style_text_font(flbl, &lv_font_montserrat_14, 0);
+            lv_label_set_text(flbl, LV_SYMBOL_TRASH " Forget");
+            lv_obj_center(flbl);
+            lv_obj_add_event_cb(fbtn, forget_clicked, LV_EVENT_RELEASED,
+                                (void*)(uintptr_t)si);
+
+            /* Connect button (only if not already connected) */
+            if(!is_connected) {
+                lv_obj_t *cbtn = lv_btn_create(row);
+                lv_obj_add_style(cbtn, &g_styles.btn_primary, 0);
+                lv_obj_set_size(cbtn, 110, 40);
+                lv_obj_align(cbtn, LV_ALIGN_RIGHT_MID, -110, 0);
+                lv_obj_t *clbl = lv_label_create(cbtn);
+                lv_obj_set_style_text_font(clbl, &lv_font_montserrat_14, 0);
+                lv_label_set_text(clbl, LV_SYMBOL_WIFI " Connect");
+                lv_obj_center(clbl);
+                lv_obj_add_event_cb(cbtn, saved_connect_clicked, LV_EVENT_RELEASED,
+                                    (void*)(uintptr_t)si);
+            }
         }
 
-        /* Forget button */
-        lv_obj_t *fbtn = lv_btn_create(row);
-        lv_obj_add_style(fbtn, &g_styles.btn_danger, 0);
-        lv_obj_set_size(fbtn, 130, 44);
-        lv_obj_t *flbl = lv_label_create(fbtn);
-        lv_obj_set_style_text_font(flbl, &lv_font_montserrat_16, 0);
-        lv_label_set_text(flbl, LV_SYMBOL_TRASH " FORGET");
-        lv_obj_center(flbl);
-        lv_obj_add_event_cb(fbtn, forget_clicked, LV_EVENT_RELEASED, NULL);
-
-        /* Separator label */
+        /* Separator */
         lv_obj_t *sep = lv_label_create(list);
         lv_obj_set_style_text_font(sep, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(sep, COLOR_MUTED, 0);
@@ -245,11 +306,10 @@ void wifi_list_screen_refresh(void)
         lv_obj_set_style_pad_bottom(sep, 2, 0);
     }
 
-    /* ── Scanned networks ── */
-    uint8_t count = wifi_service_get_ap_count();
-    /* Filter: skip the already-connected SSID so the user can't accidentally
-       click it and override the current connection.                          */
-    String conn_ssid = wifi_service_get_connected_ssid();
+    /* ── Scanned networks (deduplicated) ── */
+    /* ⭐ UPDATED: Use Core 1 task API and convert scan count */
+    int scan_status = wifi_ota_task_get_scan_count();
+    uint8_t count = (scan_status >= 0) ? (uint8_t)scan_status : 0;
 
     if(count == 0)
     {
@@ -262,26 +322,48 @@ void wifi_list_screen_refresh(void)
         lv_obj_set_style_pad_top(lbl, 30, 0);
         return;
     }
-    if(count > MAX_SCAN_APS) count = MAX_SCAN_APS;
-    for(int i=0;i<count;i++)
+
+    /* Collect unique SSIDs into ssid_store, skipping duplicates */
+    uint8_t unique_count = 0;
+    uint8_t raw = (count > MAX_SCAN_APS) ? MAX_SCAN_APS : count;
+    for(int i = 0; i < raw && unique_count < MAX_SCAN_APS; i++)
     {
-        String ssid = wifi_service_get_ssid(i);
-        strncpy(ssid_store[i], ssid.c_str(), 32);
-        ssid_store[i][32] = 0;
-        if(ssid_store[i][0] == 0) continue;  // skip empty/hidden SSIDs
-        if(!conn_ssid.isEmpty() && ssid == conn_ssid) continue;  // skip connected network
-        lv_obj_t *btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, ssid_store[i]);
+        /* ⭐ UPDATED: Use Core 1 task API */
+        String ssid = wifi_ota_task_get_ssid(i);
+        if(ssid.length() == 0) continue;                          /* skip hidden */
+        if(!conn_ssid.isEmpty() && ssid == conn_ssid) continue;   /* skip connected */
+
+        /* Skip SSIDs already shown in saved networks section */
+        bool is_saved = false;
+        for(uint8_t si = 0; si < saved_cnt && si < MAX_SAVED_ROWS; si++) {
+            if(ssid == saved_ssid_rows[si]) { is_saved = true; break; }
+        }
+        if(is_saved) continue;
+
+        /* Check for duplicate */
+        bool dup = false;
+        for(uint8_t j = 0; j < unique_count; j++) {
+            if(ssid == ssid_store[j]) { dup = true; break; }
+        }
+        if(dup) continue;
+
+        strncpy(ssid_store[unique_count], ssid.c_str(), 32);
+        ssid_store[unique_count][32] = 0;
+
+        lv_obj_t *btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, ssid_store[unique_count]);
         lv_obj_add_style(btn, &g_styles.list_btn, 0);
         lv_obj_add_event_cb(btn, ssid_clicked, LV_EVENT_RELEASED,
-                            (void*)(uintptr_t)i);
+                            (void*)(uintptr_t)unique_count);
+        unique_count++;
     }
 }
 
 /* Timer callback — polls async scan status */
 static void scan_poll_cb(lv_timer_t *t)
 {
-    int status = wifi_service_scan_status();
-    wifi_state_t ws = wifi_service_state();
+    /* ⭐ UPDATED: Use Core 1 task API */
+    int status = wifi_ota_task_get_scan_count();
+    wifi_state_t ws = wifi_ota_task_get_state();
     if(status == -1) return;  /* still scanning */
 
     wifi_list_screen_refresh();
@@ -294,14 +376,16 @@ static void scan_poll_cb(lv_timer_t *t)
 /* Start async scan and show scanning indicator */
 void wifi_list_screen_start_scan(void)
 {
-    wifi_service_cancel_scan();
+    /* ⭐ NEW: Cancel scan using Core 1 task API */
+    wifi_ota_task_enqueue(WIFI_TASK_CMD_CANCEL_SCAN, nullptr, 0);
 
     char saved_ssid[33] = {0};
     char saved_pwd[65] = {0};
     bool has_saved = storage_load_wifi_credentials(saved_ssid, sizeof(saved_ssid),
                                                    saved_pwd, sizeof(saved_pwd));
 
-    if(has_saved && wifi_service_state() == WIFI_CONNECTING) {
+    /* ⭐ UPDATED: Use Core 1 task API for state check */
+    if(has_saved && wifi_ota_task_get_state() == WIFI_CONNECTING) {
         /* A connection attempt is in progress — just refresh and poll status */
         wifi_list_screen_refresh();
         if(scan_poll_timer) lv_timer_del(scan_poll_timer);
@@ -312,8 +396,8 @@ void wifi_list_screen_start_scan(void)
     /* Show saved network row immediately (if any), then start scan */
     wifi_list_screen_refresh();
 
-    /* Start async scan — always, even when saved credentials exist */
-    wifi_service_start_scan();
+    /* ⭐ NEW: Start async scan using Core 1 task API */
+    wifi_ota_task_enqueue(WIFI_TASK_CMD_START_SCAN, nullptr, 0);
 
     /* Poll for completion every 500ms */
     if(scan_poll_timer) lv_timer_del(scan_poll_timer);

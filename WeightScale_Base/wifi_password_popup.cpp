@@ -8,6 +8,7 @@
 #ifdef LV_VERSION_MAJOR
 #include "ui_styles.h"
 #include "wifi_service.h"
+#include "wifi_ota_task.h"  /* ⭐ NEW: Use Core 1 task API */
 #include "wifi_list_screen.h"
 #include "devlog.h"
 
@@ -111,7 +112,8 @@ static void wifi_check_result(lv_timer_t *t)
 
     wp->poll_count++;
 
-    if(wifi_service_state() == WIFI_CONNECTED)
+    /* ⭐ UPDATED: Use Core 1 task API to check WiFi state */
+    if(wifi_ota_task_get_state() == WIFI_CONNECTED)
     {
         wp->result_timer = NULL;
         lv_timer_del(t);
@@ -119,10 +121,10 @@ static void wifi_check_result(lv_timer_t *t)
         lv_async_call(wifi_popup_destroy_async, wp);
         wifi_list_screen_show();
     }
-    else if(wifi_service_state() == WIFI_DISCONNECTED || wp->poll_count >= 30)
+    else if(wifi_ota_task_get_state() == WIFI_DISCONNECTED || wp->poll_count >= 30)
     {
-        /* wifi_service_loop() already set DISCONNECTED on failure/timeout,
-           or we've polled 15 times (30s) without success.                */
+        /* Core 1 task already set DISCONNECTED on failure/timeout,
+           or we've polled 15 times (30s) without success.         */
         wp->result_timer = NULL;
         lv_timer_del(t);
         devlog_printf("[WIFI POPUP] Connection failed (poll %d)", wp->poll_count);
@@ -180,10 +182,16 @@ static void wifi_popup_kb_event(lv_event_t *e)
                     wp_timer->connect_delay_timer = NULL;
                     lv_timer_del(t);
 
-                    wifi_service_connect(
-                        wp_timer->ssid,
-                        saved_password
-                    );
+                    /* ⭐ NEW: Use Core 1 task API to enqueue connect command */
+                    uint8_t ssid_len = strlen(wp_timer->ssid);
+                    uint8_t pwd_len = strlen(saved_password);
+                    uint8_t payload[2 + 33 + 65];
+                    payload[0] = ssid_len;
+                    payload[1] = pwd_len;
+                    memcpy(&payload[2], wp_timer->ssid, ssid_len);
+                    memcpy(&payload[2 + ssid_len], saved_password, pwd_len);
+                    
+                    wifi_ota_task_enqueue(WIFI_TASK_CMD_CONNECT, payload, 2 + ssid_len + pwd_len);
 
                     wp_timer->result_timer =
                         lv_timer_create(

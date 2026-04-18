@@ -41,21 +41,22 @@ static bool keypad_started = false;
 
 /* Keypad toggle state */
 static lv_obj_t *keypad_box_obj = NULL;
+static lv_obj_t *qty_row_obj = NULL;  /* ⭐ NEW: Reference to qty row for dynamic positioning */
 static bool keypad_visible = false;
+static lv_obj_t *weight_box_obj = NULL;
+static lv_obj_t *save_btn_obj = NULL;
+static int g_weight_h_hidden = 0;
+static int g_weight_h_shown = 0;
+static int g_qty_h = 0;      /* ⭐ NEW: Store qty height for calculations */
+static int g_keypad_h = 0;   /* ⭐ NEW: Store keypad height for calculations */
+static int g_gap_v = 0;      /* ⭐ NEW: Store gap for calculations */
 
 /* Save popup state */
 static lv_obj_t *save_popup = NULL;
 static lv_timer_t *save_popup_timer = NULL;
 static lv_timer_t *clock_timer = NULL;
 
-static void home_screen_update_weight_scale(void)
-{
-    if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) return;
-
-    /* Use only compiled-in fonts to avoid clipping issues on this target. */
-    lv_obj_set_style_text_font(lbl_weight,
-        keypad_visible ? &lv_font_montserrat_36 : &lv_font_montserrat_48, 0);
-}
+/* (weight font is fixed at montserrat_48 — weight_box height computed at build) */
 
 static void home_screen_refresh_clock(void)
 {
@@ -84,7 +85,15 @@ static void home_screen_cleanup(void)
     keypad_value = 1;
     keypad_started = false;
     keypad_box_obj = NULL;
+    qty_row_obj = NULL;  /* ⭐ NEW: Reset qty row reference */
     keypad_visible = false;
+    weight_box_obj = NULL;
+    save_btn_obj = NULL;
+    g_weight_h_hidden = 0;
+    g_weight_h_shown = 0;
+    g_qty_h = 0;          /* ⭐ NEW: Reset qty height */
+    g_keypad_h = 0;       /* ⭐ NEW: Reset keypad height */
+    g_gap_v = 0;          /* ⭐ NEW: Reset gap */
     if(clock_timer) { lv_timer_del(clock_timer); clock_timer = NULL; }
     if(save_popup_timer) { lv_timer_del(save_popup_timer); save_popup_timer = NULL; }
     if(save_popup && lv_obj_is_valid(save_popup)) { lv_obj_del(save_popup); }
@@ -188,12 +197,37 @@ static void multiply_btn_cb(lv_event_t *e)
 
     if(!keypad_box_obj || !lv_obj_is_valid(keypad_box_obj)) return;
     keypad_visible = !keypad_visible;
+    
     if(keypad_visible) {
+        /* Show keypad: shrink weight box and reposition qty_row and keypad below it */
+        if(weight_box_obj && lv_obj_is_valid(weight_box_obj))
+            lv_obj_set_height(weight_box_obj, g_weight_h_shown);
+        
+        /* Position qty_row below the weight box (stuck to bottom of weight box) */
+        if(qty_row_obj && lv_obj_is_valid(qty_row_obj)) {
+            lv_obj_align(qty_row_obj, LV_ALIGN_TOP_LEFT, 0, g_weight_h_shown + g_gap_v);
+        }
+        
+        /* Show keypad positioned below qty_row */
         lv_obj_clear_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);
+        int keypad_y = g_weight_h_shown + g_gap_v + g_qty_h + g_gap_v;
+        lv_obj_align(keypad_box_obj, LV_ALIGN_TOP_MID, 0, keypad_y);
     } else {
+        /* Hide keypad: expand weight box and reposition qty_row */
+        if(weight_box_obj && lv_obj_is_valid(weight_box_obj))
+            lv_obj_set_height(weight_box_obj, g_weight_h_hidden);
+        
+        /* Position qty_row below the weight box (stuck to bottom of weight box) */
+        if(qty_row_obj && lv_obj_is_valid(qty_row_obj)) {
+            lv_obj_align(qty_row_obj, LV_ALIGN_TOP_LEFT, 0, g_weight_h_hidden + g_gap_v);
+        }
+        
+        /* Hide keypad */
         lv_obj_add_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);
     }
-    home_screen_update_weight_scale();
+    
+    if(keypad_box_obj && lv_obj_is_valid(keypad_box_obj))
+        lv_obj_move_foreground(keypad_box_obj);
 }
 
 void home_screen_register_callback(void (*cb)(int evt))
@@ -270,7 +304,7 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_add_style(sn_btn, &g_styles.btn_action, 0);
     lbl_invoice = lv_label_create(sn_btn);
     lv_obj_set_style_text_font(lbl_invoice, &lv_font_montserrat_16, 0);
-    lv_label_set_text(lbl_invoice, "S/N #1");
+    lv_label_set_text(lbl_invoice, "S/N 1");
     lv_obj_center(lbl_invoice);
 
     /* HISTORY */
@@ -325,91 +359,88 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_size(main, DISPLAY_WIDTH, DISPLAY_HEIGHT - 94);
     lv_obj_align(main, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    /* ===== LEFT PANEL - Weight & Controls (flex column, expanded) ===== */
+    /* ===== LEFT PANEL - Weight & Controls ===== */
+    /* Use absolute positioning — reliable on LVGL 8 embedded targets.
+       Left panel inner area (after card padding ~10px each side):
+       usable width  ≈ (DISPLAY_WIDTH - 200) - 20 = ~804
+       usable height ≈ (DISPLAY_HEIGHT - 100) - 20 = ~480              */
+
+    const int left_w = DISPLAY_WIDTH - 200;
+    const int left_h = DISPLAY_HEIGHT - 100;
+    const int pad = 10;                     /* card padding approx      */
+    const int inner_w = left_w - 2 * pad;   /* ~804                     */
+    const int inner_h = left_h - 2 * pad;   /* ~480                     */
+
+    /* Fixed element heights */
+    const int qty_h    = 46;
+    const int keypad_h = 130;
+    const int save_h   = 75;
+    const int gap_v    = 6;
+
+    /* Weight box height in both states */
+    const int weight_h_hidden = inner_h - qty_h - save_h - 3 * gap_v;             /* no keypad */
+    const int weight_h_shown  = inner_h - qty_h - keypad_h - save_h - 4 * gap_v;  /* keypad visible */
 
     lv_obj_t *left = lv_obj_create(main);
-    lv_obj_add_style(left,&g_styles.card,0);
-    lv_obj_set_size(left, DISPLAY_WIDTH - 200, DISPLAY_HEIGHT - 100);
-    lv_obj_align(left,LV_ALIGN_LEFT_MID,5,0);
-    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(left, 6, 0);
+    lv_obj_add_style(left, &g_styles.card, 0);
+    lv_obj_set_size(left, left_w, left_h);
+    lv_obj_align(left, LV_ALIGN_LEFT_MID, 5, 0);
     lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(left, LV_SCROLLBAR_MODE_OFF);
 
-    /* --- WEIGHT DISPLAY (grows to fill available space) --- */
-    lv_obj_t *weight_box = lv_obj_create(left);
-    lv_obj_set_width(weight_box, lv_pct(100));
-    lv_obj_set_flex_grow(weight_box, 1);  /* hero element — expands when keypad hidden */
-    lv_obj_set_style_min_height(weight_box, 150, 0);
-    lv_obj_set_style_bg_color(weight_box, ui_theme_surface(), 0);
-    lv_obj_set_style_bg_opa(weight_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(weight_box, 12, 0);
-    lv_obj_set_style_border_width(weight_box, 2, 0);
-    lv_obj_set_style_border_color(weight_box, ui_theme_border(), 0);
-    lv_obj_set_style_pad_top(weight_box, 10, 0);
-    lv_obj_set_style_pad_bottom(weight_box, 10, 0);
-    lv_obj_set_style_pad_left(weight_box, 12, 0);
-    lv_obj_set_style_pad_right(weight_box, 12, 0);
-    lv_obj_set_style_pad_gap(weight_box, 8, 0);
-    lv_obj_clear_flag(weight_box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(weight_box, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(weight_box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    /* --- Y cursor for stacking elements --- */
+    int cur_y = 0;
 
-    lv_obj_t *kg_label = lv_label_create(weight_box);
+    /* --- WEIGHT DISPLAY --- */
+    weight_box_obj = lv_obj_create(left);
+    lv_obj_set_size(weight_box_obj, inner_w, weight_h_hidden);
+    lv_obj_align(weight_box_obj, LV_ALIGN_TOP_MID, 0, cur_y);
+    lv_obj_set_style_bg_color(weight_box_obj, ui_theme_surface(), 0);
+    lv_obj_set_style_bg_opa(weight_box_obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(weight_box_obj, 12, 0);
+    lv_obj_set_style_border_width(weight_box_obj, 2, 0);
+    lv_obj_set_style_border_color(weight_box_obj, ui_theme_border(), 0);
+    lv_obj_set_style_pad_all(weight_box_obj, 0, 0);
+    lv_obj_clear_flag(weight_box_obj, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *kg_label = lv_label_create(weight_box_obj);
     lv_obj_set_style_text_font(kg_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(kg_label, ui_theme_muted(), 0);
     lv_label_set_text(kg_label, "WEIGHT (kg)");
-    lv_obj_set_width(kg_label, lv_pct(100));
-    lv_obj_set_style_text_align(kg_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(kg_label, LV_ALIGN_TOP_MID, 0, 10);
 
-    lv_obj_t *weight_value_wrap = lv_obj_create(weight_box);
-    lv_obj_remove_style_all(weight_value_wrap);
-    lv_obj_set_width(weight_value_wrap, lv_pct(100));
-    lv_obj_set_flex_grow(weight_value_wrap, 1);
-    lv_obj_set_style_pad_top(weight_value_wrap, 12, 0);
-    lv_obj_set_style_pad_bottom(weight_value_wrap, 12, 0);
-    lv_obj_clear_flag(weight_value_wrap, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(weight_value_wrap, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(weight_value_wrap, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    lbl_weight = lv_label_create(weight_value_wrap);
+    lbl_weight = lv_label_create(weight_box_obj);
     lv_obj_set_style_text_font(lbl_weight, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(lbl_weight,
         ui_styles_is_light_mode() ? lv_color_hex(0x0E7490) : lv_color_hex(0x22D3EE), 0);
-    lv_label_set_text(lbl_weight,"0.00");
-    lv_obj_set_width(lbl_weight, LV_SIZE_CONTENT);
-    lv_obj_set_style_text_align(lbl_weight, LV_TEXT_ALIGN_CENTER, 0);
-    home_screen_update_weight_scale();
+    lv_label_set_text(lbl_weight, "0.00");
+    lv_obj_align(lbl_weight, LV_ALIGN_CENTER, 0, 10);
 
-    /* ===== QTY / MULTIPLY / TOTAL — single row, clipped labels ===== */
-
+    /* --- QTY / MULTIPLY / TOTAL (stick to BOTTOM of weight box) --- */
     lv_obj_t *qty_row = lv_obj_create(left);
     lv_obj_remove_style_all(qty_row);
-    lv_obj_set_size(qty_row, lv_pct(100), 46);
+    lv_obj_set_size(qty_row, inner_w, qty_h);
+    lv_obj_align(qty_row, LV_ALIGN_TOP_MID, 0, weight_h_hidden + gap_v);  /* Position below weight box */
     lv_obj_clear_flag(qty_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(qty_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(qty_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(qty_row, 0, 0);
-    lv_obj_set_style_pad_right(qty_row, 0, 0);
-    lv_obj_set_style_pad_top(qty_row, 0, 0);
-    lv_obj_set_style_pad_bottom(qty_row, 0, 0);
-    lv_obj_set_style_pad_gap(qty_row, 10, 0);
+    
+    /* ⭐ STORE: Qty row object for dynamic positioning */
+    qty_row_obj = qty_row;
+    g_qty_h = qty_h;
+    g_gap_v = gap_v;
 
     lbl_qty = lv_label_create(qty_row);
     lv_obj_add_style(lbl_qty, &g_styles.value_big, 0);
     lv_label_set_text(lbl_qty, "Qty: 1");
     lv_label_set_long_mode(lbl_qty, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(lbl_qty, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(lbl_qty, 205);
+    lv_obj_set_width(lbl_qty, 170);
+    lv_obj_align(lbl_qty, LV_ALIGN_LEFT_MID, 0, 0);
 
     /* Multiply button — toggles keypad visibility */
     lv_obj_t *mult_btn = lv_btn_create(qty_row);
     lv_obj_set_size(mult_btn, 150, 42);
+    lv_obj_align(mult_btn, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_style(mult_btn, &g_styles.btn_warning, 0);
-    lv_obj_set_style_pad_hor(mult_btn, 10, 0);
-    lv_obj_set_style_pad_ver(mult_btn, 6, 0);
-    lv_obj_set_style_min_height(mult_btn, 42, 0);
     lv_obj_add_event_cb(mult_btn, multiply_btn_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(mult_btn, multiply_btn_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_t *mult_lbl = lv_label_create(mult_btn);
@@ -421,19 +452,24 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_add_style(lbl_total_weight, &g_styles.value_big, 0);
     lv_label_set_long_mode(lbl_total_weight, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(lbl_total_weight, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(lbl_total_weight, 335);
+    lv_obj_set_width(lbl_total_weight, 300);
+    lv_obj_align(lbl_total_weight, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_label_set_text(lbl_total_weight, "Total: 0.00 kg");
 
-    /* ===== NUMERIC KEYPAD (hidden by default) ===== */
+    cur_y += qty_h + gap_v;
 
+    /* --- NUMERIC KEYPAD (hidden by default) --- */
     keypad_box_obj = lv_obj_create(left);
     lv_obj_remove_style_all(keypad_box_obj);
-    lv_obj_set_size(keypad_box_obj, lv_pct(100), 130);
+    lv_obj_set_size(keypad_box_obj, inner_w, keypad_h);
+    lv_obj_align(keypad_box_obj, LV_ALIGN_TOP_MID, 0, weight_h_hidden + qty_h + 2*gap_v);  /* Position below qty row */
     lv_obj_clear_flag(keypad_box_obj, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);  /* hidden until Multiply pressed */
+    lv_obj_add_flag(keypad_box_obj, LV_OBJ_FLAG_HIDDEN);
     keypad_visible = false;
+    
+    /* ⭐ STORE: Keypad object for dynamic positioning */
+    g_keypad_h = keypad_h;
 
-    /* Helper to create a keypad button */
     #define KPAD_BTN(parent, x, y, w, h, label_text, font, style, key_id) \
     do { \
         lv_obj_t *kb = lv_btn_create(parent); \
@@ -448,45 +484,46 @@ void home_screen_create(lv_obj_t *parent)
         lv_obj_center(kl); \
     } while(0)
 
-    /* 2-row keypad: 6 buttons per row, wider buttons for expanded panel */
-    const int kw = 120, kh = 50, gap = 10;
+    const int kw = 120, kh = 50, kgap = 10;
     const int row1_y = 5, row2_y = 5 + kh + 10;
 
-    /* Row 1: [1] [2] [3] [4] [5] [CLR] */
     for(int d = 1; d <= 5; d++) {
         char dl[2] = { (char)('0'+d), 0 };
-        int xp = (d - 1) * (kw + gap);
+        int xp = (d - 1) * (kw + kgap);
         KPAD_BTN(keypad_box_obj, xp, row1_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
     }
-    KPAD_BTN(keypad_box_obj, 5 * (kw + gap), row1_y, kw, kh, "CLR", &lv_font_montserrat_16, &g_styles.btn_danger, -1);
+    KPAD_BTN(keypad_box_obj, 5 * (kw + kgap), row1_y, kw, kh, "CLR", &lv_font_montserrat_16, &g_styles.btn_danger, -1);
 
-    /* Row 2: [6] [7] [8] [9] [0] [⌫] */
     for(int d = 6; d <= 9; d++) {
         char dl[2] = { (char)('0'+d), 0 };
-        int xp = (d - 6) * (kw + gap);
+        int xp = (d - 6) * (kw + kgap);
         KPAD_BTN(keypad_box_obj, xp, row2_y, kw, kh, dl, &lv_font_montserrat_20, &g_styles.btn_secondary, d);
     }
-    KPAD_BTN(keypad_box_obj, 4 * (kw + gap), row2_y, kw, kh, "0", &lv_font_montserrat_20, &g_styles.btn_secondary, 0);
-    KPAD_BTN(keypad_box_obj, 5 * (kw + gap), row2_y, kw, kh, LV_SYMBOL_BACKSPACE, &lv_font_montserrat_16, &g_styles.btn_warning, -2);
+    KPAD_BTN(keypad_box_obj, 4 * (kw + kgap), row2_y, kw, kh, "0", &lv_font_montserrat_20, &g_styles.btn_secondary, 0);
+    KPAD_BTN(keypad_box_obj, 5 * (kw + kgap), row2_y, kw, kh, LV_SYMBOL_BACKSPACE, &lv_font_montserrat_16, &g_styles.btn_warning, -2);
 
     #undef KPAD_BTN
 
-    /* ===== SAVE BUTTON (fixed height, full width) ===== */
+    /* Store height values for multiply callback */
+    g_weight_h_hidden = weight_h_hidden;
+    g_weight_h_shown  = weight_h_shown;
 
-    lv_obj_t *final_btn = lv_btn_create(left);
-    lv_obj_set_size(final_btn, lv_pct(100), 75);
-    lv_obj_add_style(final_btn, &g_styles.btn_primary, 0);
-    lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESET);
-    lv_obj_add_event_cb(final_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESET);
-    lv_obj_set_style_bg_color(final_btn, lv_color_hex(0x15803D), 0);
-    lv_obj_set_style_bg_grad_color(final_btn, lv_color_hex(0x166534), 0);
-    lv_obj_set_style_bg_grad_dir(final_btn, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_color(final_btn, lv_color_hex(0x4ADE80), 0);
-    lv_obj_set_style_shadow_width(final_btn, 14, 0);
-    lv_obj_set_style_shadow_color(final_btn, lv_color_hex(0x22C55E), 0);
-    lv_obj_set_style_shadow_opa(final_btn, LV_OPA_40, 0);
-    lv_obj_set_style_text_color(final_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_t *lbl_final = lv_label_create(final_btn);
+    /* ===== SAVE BUTTON (ALWAYS AT BOTTOM) ===== */
+    save_btn_obj = lv_btn_create(left);
+    lv_obj_set_size(save_btn_obj, inner_w, save_h);
+    lv_obj_align(save_btn_obj, LV_ALIGN_BOTTOM_MID, 0, 0);  /* ⭐ FIXED: Always at bottom using BOTTOM_MID */
+    lv_obj_add_style(save_btn_obj, &g_styles.btn_primary, 0);
+    lv_obj_add_event_cb(save_btn_obj, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESET);
+    lv_obj_add_event_cb(save_btn_obj, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESET);
+    lv_obj_set_style_bg_color(save_btn_obj, lv_color_hex(0x15803D), 0);
+    lv_obj_set_style_bg_grad_color(save_btn_obj, lv_color_hex(0x166534), 0);
+    lv_obj_set_style_bg_grad_dir(save_btn_obj, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_border_color(save_btn_obj, lv_color_hex(0x4ADE80), 0);
+    lv_obj_set_style_shadow_width(save_btn_obj, 14, 0);
+    lv_obj_set_style_shadow_color(save_btn_obj, lv_color_hex(0x22C55E), 0);
+    lv_obj_set_style_shadow_opa(save_btn_obj, LV_OPA_40, 0);
+    lv_obj_set_style_text_color(save_btn_obj, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_t *lbl_final = lv_label_create(save_btn_obj);
     lv_obj_set_style_text_font(lbl_final, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(lbl_final, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(lbl_final, LV_SYMBOL_SAVE " SAVE");
@@ -644,7 +681,7 @@ void home_screen_set_invoice(uint32_t id)
 {
     if(!lbl_invoice || !lv_obj_is_valid(lbl_invoice)) return;
 
-    snprintf(g_format_buf, sizeof(g_format_buf), "S/N #%lu", id);
+    snprintf(g_format_buf, sizeof(g_format_buf), "S/N %lu", id);
     lv_label_set_text(lbl_invoice, g_format_buf);
 }
 
@@ -692,7 +729,7 @@ void home_screen_show_save_popup(uint32_t serial_num)
 
     /* Popup card */
     lv_obj_t *card = lv_obj_create(save_popup);
-    lv_obj_set_size(card, 420, 220);
+    lv_obj_set_size(card, 560, 300);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1E293B), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
@@ -706,25 +743,25 @@ void home_screen_show_save_popup(uint32_t serial_num)
 
     /* Check mark / Saved label */
     lv_obj_t *check_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(check_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(check_lbl, &lv_font_montserrat_36, 0);
     lv_obj_set_style_text_color(check_lbl, lv_color_hex(0x4ADE80), 0);
     lv_label_set_text(check_lbl, LV_SYMBOL_OK " Saved!");
-    lv_obj_align(check_lbl, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(check_lbl, LV_ALIGN_TOP_MID, 0, 38);
 
-    /* Next Serial Number */
+    /* Saved Serial Number */
     lv_obj_t *sn_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(sn_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(sn_lbl, &lv_font_montserrat_36, 0);
     lv_obj_set_style_text_color(sn_lbl, lv_color_hex(0xFFFFFF), 0);
-    snprintf(g_format_buf, sizeof(g_format_buf), "Next S/N: #%lu", serial_num);
+    snprintf(g_format_buf, sizeof(g_format_buf), "Saved S/N: %lu", serial_num);
     lv_label_set_text(sn_lbl, g_format_buf);
-    lv_obj_align(sn_lbl, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_align(sn_lbl, LV_ALIGN_CENTER, 0, 20);
 
     /* Hint text */
     lv_obj_t *hint_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(hint_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(hint_lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(hint_lbl, lv_color_hex(0x94A3B8), 0);
     lv_label_set_text(hint_lbl, "Place weight to dismiss");
-    lv_obj_align(hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_align(hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -28);
 
     /* Auto-dismiss after 60 seconds */
     save_popup_timer = lv_timer_create(save_popup_timer_cb, 60000, NULL);

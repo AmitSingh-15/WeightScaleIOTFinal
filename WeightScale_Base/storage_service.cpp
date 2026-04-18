@@ -252,34 +252,185 @@ bool storage_get_record_by_index(uint32_t index, invoice_record_t *out)
    WIFI CREDENTIAL STORAGE
 =========================================================*/
 
+/* =========================================================
+   MULTI-NETWORK WIFI CREDENTIAL STORAGE
+   Stores up to WIFI_MAX_SAVED networks in NVS.
+   Keys: wifi_cnt (uint8), wifi_s0..wifi_s4 (SSID), wifi_p0..wifi_p4 (pwd)
+   The "primary" (index 0) is the most recently connected.
+   Legacy keys wifi_ssid/wifi_pwd are migrated on first load.
+========================================================= */
+
+static bool wifi_legacy_migrated = false;
+
+static void wifi_migrate_legacy(void)
+{
+    if(wifi_legacy_migrated) return;
+    wifi_legacy_migrated = true;
+
+    /* Already have new-format data? skip */
+    if(prefs.isKey("wifi_cnt")) return;
+
+    /* Migrate old single-credential keys */
+    String old_ssid = prefs.getString("wifi_ssid", "");
+    if(old_ssid.length() == 0) return;
+
+    String old_pwd = prefs.getString("wifi_pwd", "");
+    prefs.putUChar("wifi_cnt", 1);
+    prefs.putString("wifi_s0", old_ssid);
+    prefs.putString("wifi_p0", old_pwd);
+    prefs.remove("wifi_ssid");
+    prefs.remove("wifi_pwd");
+}
+
+uint8_t storage_get_wifi_count(void)
+{
+    wifi_migrate_legacy();
+    return prefs.getUChar("wifi_cnt", 0);
+}
+
+bool storage_get_wifi_at(uint8_t index, char *ssid, size_t ssid_max, char *pwd, size_t pwd_max)
+{
+    wifi_migrate_legacy();
+    uint8_t cnt = prefs.getUChar("wifi_cnt", 0);
+    if(index >= cnt) return false;
+
+    char key_s[10], key_p[10];
+    snprintf(key_s, sizeof(key_s), "wifi_s%u", index);
+    snprintf(key_p, sizeof(key_p), "wifi_p%u", index);
+
+    String s = prefs.getString(key_s, "");
+    if(s.length() == 0) return false;
+    strncpy(ssid, s.c_str(), ssid_max);
+    ssid[ssid_max - 1] = 0;
+
+    String p = prefs.getString(key_p, "");
+    strncpy(pwd, p.c_str(), pwd_max);
+    pwd[pwd_max - 1] = 0;
+    return true;
+}
+
+bool storage_find_wifi_password(const char *ssid, char *pwd, size_t pwd_max)
+{
+    if(!ssid || !ssid[0]) return false;
+    wifi_migrate_legacy();
+    uint8_t cnt = prefs.getUChar("wifi_cnt", 0);
+    for(uint8_t i = 0; i < cnt; i++) {
+        char key_s[10], key_p[10];
+        snprintf(key_s, sizeof(key_s), "wifi_s%u", i);
+        String s = prefs.getString(key_s, "");
+        if(s == ssid) {
+            snprintf(key_p, sizeof(key_p), "wifi_p%u", i);
+            String p = prefs.getString(key_p, "");
+            strncpy(pwd, p.c_str(), pwd_max);
+            pwd[pwd_max - 1] = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
 void storage_save_wifi_credentials(const char *ssid, const char *password)
 {
     if(!ssid || !ssid[0]) return;
-    prefs.putString("wifi_ssid", ssid);
-    prefs.putString("wifi_pwd", password ? password : "");
+    wifi_migrate_legacy();
+    uint8_t cnt = prefs.getUChar("wifi_cnt", 0);
+
+    /* Check if SSID already saved — update password & promote to index 0 */
+    int existing = -1;
+    for(uint8_t i = 0; i < cnt; i++) {
+        char key_s[10];
+        snprintf(key_s, sizeof(key_s), "wifi_s%u", i);
+        String s = prefs.getString(key_s, "");
+        if(s == ssid) { existing = i; break; }
+    }
+
+    if(existing == 0) {
+        /* Already at top — just update password */
+        prefs.putString("wifi_p0", password ? password : "");
+        return;
+    }
+
+    /* Shift entries down to make room at index 0 */
+    int start = (existing >= 0) ? existing : cnt;
+    if(start >= WIFI_MAX_SAVED) start = WIFI_MAX_SAVED - 1;
+
+    for(int i = start; i > 0; i--) {
+        char src_s[10], src_p[10], dst_s[10], dst_p[10];
+        snprintf(src_s, sizeof(src_s), "wifi_s%u", i - 1);
+        snprintf(src_p, sizeof(src_p), "wifi_p%u", i - 1);
+        snprintf(dst_s, sizeof(dst_s), "wifi_s%u", i);
+        snprintf(dst_p, sizeof(dst_p), "wifi_p%u", i);
+        prefs.putString(dst_s, prefs.getString(src_s, ""));
+        prefs.putString(dst_p, prefs.getString(src_p, ""));
+    }
+
+    /* Write new entry at index 0 */
+    prefs.putString("wifi_s0", ssid);
+    prefs.putString("wifi_p0", password ? password : "");
+
+    /* Update count */
+    if(existing < 0) {
+        cnt++;
+        if(cnt > WIFI_MAX_SAVED) cnt = WIFI_MAX_SAVED;
+    }
+    prefs.putUChar("wifi_cnt", cnt);
 }
 
 bool storage_load_wifi_credentials(char *ssid, size_t ssid_max, char *pwd, size_t pwd_max)
 {
-    if(!ssid || !pwd) return false;
-
-    String s = prefs.getString("wifi_ssid", "");
-    if(s.length() == 0) return false;
-
-    strncpy(ssid, s.c_str(), ssid_max);
-    ssid[ssid_max - 1] = 0;
-
-    String p = prefs.getString("wifi_pwd", "");
-    strncpy(pwd, p.c_str(), pwd_max);
-    pwd[pwd_max - 1] = 0;
-
-    return true;
+    /* Returns the primary (index 0) credential — backward compatible */
+    return storage_get_wifi_at(0, ssid, ssid_max, pwd, pwd_max);
 }
 
 void storage_forget_wifi_credentials(void)
 {
-    prefs.remove("wifi_ssid");
-    prefs.remove("wifi_pwd");
+    /* Forget ALL saved networks */
+    wifi_migrate_legacy();
+    uint8_t cnt = prefs.getUChar("wifi_cnt", 0);
+    for(uint8_t i = 0; i < cnt; i++) {
+        char key_s[10], key_p[10];
+        snprintf(key_s, sizeof(key_s), "wifi_s%u", i);
+        snprintf(key_p, sizeof(key_p), "wifi_p%u", i);
+        prefs.remove(key_s);
+        prefs.remove(key_p);
+    }
+    prefs.putUChar("wifi_cnt", 0);
+}
+
+void storage_forget_wifi_ssid(const char *ssid)
+{
+    if(!ssid || !ssid[0]) return;
+    wifi_migrate_legacy();
+    uint8_t cnt = prefs.getUChar("wifi_cnt", 0);
+
+    /* Find the SSID */
+    int found = -1;
+    for(uint8_t i = 0; i < cnt; i++) {
+        char key_s[10];
+        snprintf(key_s, sizeof(key_s), "wifi_s%u", i);
+        String s = prefs.getString(key_s, "");
+        if(s == ssid) { found = i; break; }
+    }
+    if(found < 0) return;
+
+    /* Shift remaining entries up */
+    for(int i = found; i < cnt - 1; i++) {
+        char src_s[10], src_p[10], dst_s[10], dst_p[10];
+        snprintf(src_s, sizeof(src_s), "wifi_s%u", i + 1);
+        snprintf(src_p, sizeof(src_p), "wifi_p%u", i + 1);
+        snprintf(dst_s, sizeof(dst_s), "wifi_s%u", i);
+        snprintf(dst_p, sizeof(dst_p), "wifi_p%u", i);
+        prefs.putString(dst_s, prefs.getString(src_s, ""));
+        prefs.putString(dst_p, prefs.getString(src_p, ""));
+    }
+
+    /* Remove last entry and decrement count */
+    char last_s[10], last_p[10];
+    snprintf(last_s, sizeof(last_s), "wifi_s%u", cnt - 1);
+    snprintf(last_p, sizeof(last_p), "wifi_p%u", cnt - 1);
+    prefs.remove(last_s);
+    prefs.remove(last_p);
+    prefs.putUChar("wifi_cnt", cnt - 1);
 }
 
 /* =========================================================

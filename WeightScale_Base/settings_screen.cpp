@@ -36,6 +36,7 @@ static void (*calibration_cb)(void) = NULL;
 static lv_obj_t *settings_scr_ref = NULL;
 static lv_obj_t *wifi_list_scr = NULL;
 static lv_obj_t *ota_status_label = NULL;
+static lv_obj_t *ota_btn_ref = NULL;
 static lv_obj_t *device_name_label = NULL;
 static lv_obj_t *device_id_label = NULL;
 static lv_obj_t *offset_lbl = NULL;
@@ -94,6 +95,13 @@ static lv_obj_t *ota_overlay = NULL;
 static lv_obj_t *ota_overlay_label = NULL;
 static lv_obj_t *ota_overlay_bar = NULL;
 static lv_obj_t *ota_overlay_pct = NULL;
+
+static void ota_ui_reset_after_attempt(void)
+{
+    if(ota_btn_ref && lv_obj_is_valid(ota_btn_ref))
+        lv_obj_clear_state(ota_btn_ref, LV_STATE_DISABLED);
+    ota_requested = false;
+}
 
 static void show_ota_overlay(const char *msg)
 {
@@ -174,8 +182,8 @@ static void ota_cb(lv_event_t *e)
     if(ota_requested) return;  // prevent double click
 
     ota_requested = true;
-
-    lv_obj_add_state(lv_event_get_target(e), LV_STATE_DISABLED);
+    ota_btn_ref = lv_event_get_target(e);
+    lv_obj_add_state(ota_btn_ref, LV_STATE_DISABLED);
 
     if(ota_status_label && lv_obj_is_valid(ota_status_label))
     {
@@ -437,6 +445,7 @@ void settings_screen_create(lv_obj_t *parent)
         settings_scr_ref = NULL;
         connecting_overlay = NULL;
         ota_status_label = NULL;
+        ota_btn_ref = NULL;
         device_name_label = NULL;
         device_id_label = NULL;
         dev_log_ta = NULL;
@@ -509,6 +518,7 @@ void settings_screen_create(lv_obj_t *parent)
     lv_label_set_text(lv_label_create(scan_btn), LV_SYMBOL_WIFI " Scan Wi-Fi");
 
     lv_obj_t *ota_btn = lv_btn_create(btn_row1);
+    ota_btn_ref = ota_btn;
     lv_obj_add_style(ota_btn, &g_styles.btn_action, 0);
     lv_obj_set_size(ota_btn, 250, 70);
     lv_obj_add_event_cb(ota_btn, ota_cb, LV_EVENT_RELEASED, NULL);
@@ -525,8 +535,6 @@ void settings_screen_create(lv_obj_t *parent)
 lv_timer_create([](lv_timer_t *t){
 
     if(!ota_requested) return;
-
-    ota_requested = false;
 
     if(ota_status_label && lv_obj_is_valid(ota_status_label))
     {
@@ -548,6 +556,7 @@ lv_timer_create([](lv_timer_t *t){
             scale_service_resume();
             /* Hide overlay on task end (failure/no-update path) */
             lv_async_call([](void *d){ hide_ota_overlay(); }, NULL);
+            lv_async_call([](void *d){ ota_ui_reset_after_attempt(); }, NULL);
             vTaskDelete(NULL);
         },
         "ota_task",
@@ -580,7 +589,12 @@ lv_timer_create([](lv_timer_t *t){
             }
             update_ota_overlay_msg(text);
             /* Hide overlay on final states (failure) */
-            if(strstr(text, "failed") || strstr(text, "No update") || strstr(text, "Already")) {
+            if(strstr(text, "failed") || strstr(text, "Already")
+               || strstr(text, "Latest") || strstr(text, "offline")
+               || strstr(text, "busy") || strstr(text, "Wait for Wi-Fi")
+               || strstr(text, "No space") || strstr(text, "Bad file size")
+               || strstr(text, "Download incomplete")
+               || strstr(text, "Finalize failed")) {
                 hide_ota_overlay();
             }
             free(data);

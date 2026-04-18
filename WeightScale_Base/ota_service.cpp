@@ -51,8 +51,8 @@ static bool wait_for_wifi_settle(int timeout_ms)
 // ===== OTA CONFIG =====
 #define OTA_VERSION        "1.1.0"             // current firmware version
 #define OTA_DEFAULT_VERSION OTA_VERSION
-#define OTA_VERSION_URL    "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/refs/heads/main/firmware/version.txt"
-#define OTA_BIN_URL        "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/refs/heads/main/firmware/Weights.bin"
+#define OTA_VERSION_URL    "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/main/firmware/version.txt"
+#define OTA_BIN_URL        "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/main/firmware/Weights.bin"
 
 static ota_display_cb_t display_cb = nullptr;
 static ota_progress_cb_t progress_cb = nullptr;
@@ -195,7 +195,7 @@ void ota_service_check_and_update(void)
     HTTPClient http;
     WiFiClientSecure version_client;
     if (!begin_https(http, version_client, OTA_VERSION_URL, 15000)) {
-        if(display_cb) display_cb("OTA: Version fetch fail");
+        if(display_cb) display_cb("OTA: Version fetch failed");
         devlog_printf("[OTA] Version fetch begin failed");
         ota_finish_attempt(true);
         return;
@@ -203,7 +203,7 @@ void ota_service_check_and_update(void)
 
     int code = http.GET();
     if (code != 200) {
-        if(display_cb) display_cb("OTA: Version fetch fail");
+        if(display_cb) display_cb("OTA: Version fetch failed");
         devlog_printf("[OTA] Version fetch failed with code: %d", code);
         http.end();
         ota_finish_attempt(true);
@@ -219,7 +219,7 @@ void ota_service_check_and_update(void)
     delay(500);
 
     if (!is_newer_version(remote_version)) {
-        if(display_cb) display_cb("OTA: Latest version");
+        if(display_cb) display_cb("OTA: Already on latest version");
         devlog_printf("[OTA] Device already on latest version: %s", remote_version.c_str());
         ota_finish_attempt(true);
         return;
@@ -235,14 +235,9 @@ void ota_service_check_and_update(void)
     sync_service_deinit();
     devlog_printf("[OTA] Sync fully deinitialized for OTA");
 
-    // Reduce UI load (DO NOT kill LVGL completely)
-    // lv_timer_pause_all(); // Not available in LVGL 8.x
-    lv_obj_clean(lv_scr_act());
-
-    // Show simple OTA message
-    lv_obj_t *label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, "Updating...\nDo not turn off");
-    lv_obj_center(label);
+    /* The settings screen already shows a progress overlay.
+       Avoid touching LVGL directly from this OTA worker task. */
+    if (display_cb) display_cb("OTA: Downloading update...");
 
     // Heap check before OTA
     size_t heap = esp_get_free_heap_size();
@@ -312,7 +307,7 @@ void ota_service_check_and_update(void)
     int lastPct = -1;
     unsigned long lastActivity = millis();
 
-    devlog_printf("[OTA] Starting download (4KB chunks)...");
+    devlog_printf("[OTA] Starting download (%d-byte chunks)...", OTA_CHUNK);
 
     int sdio_err_count = 0;
 

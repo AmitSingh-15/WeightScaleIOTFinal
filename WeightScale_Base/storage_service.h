@@ -52,10 +52,24 @@ uint32_t storage_load_device_id(void);
 
 bool storage_get_record_by_index(uint32_t index, invoice_record_t *out);
 
-/* ===== WIFI CREDENTIAL STORAGE ===== */
+/* ===== WIFI CREDENTIAL STORAGE (multi-network) ===== */
+#define WIFI_MAX_SAVED 5
+
 void storage_save_wifi_credentials(const char *ssid, const char *password);
 bool storage_load_wifi_credentials(char *ssid, size_t ssid_max, char *pwd, size_t pwd_max);
 void storage_forget_wifi_credentials(void);
+
+/* Multi-network: find password for a specific SSID (returns true if found) */
+bool storage_find_wifi_password(const char *ssid, char *pwd, size_t pwd_max);
+
+/* Get count of saved networks */
+uint8_t storage_get_wifi_count(void);
+
+/* Get SSID at index (0-based). Returns false if index out of range */
+bool storage_get_wifi_at(uint8_t index, char *ssid, size_t ssid_max, char *pwd, size_t pwd_max);
+
+/* Forget a specific SSID */
+void storage_forget_wifi_ssid(const char *ssid);
 
 /* ===== ENVIRONMENT (Dev/Prod) STORAGE ===== */
 void storage_save_env_prod(bool is_prod);

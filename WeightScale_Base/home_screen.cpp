@@ -13,6 +13,7 @@
 #include "time_service.h"
 #include "ota_service.h"
 #include "lvgl_port.h"         /* lvgl_port_lock / unlock */
+#include "devlog.h"
 
 #ifdef LV_VERSION_MAJOR
 #ifdef __cplusplus
@@ -843,6 +844,8 @@ void home_screen_set_version(const char *ver)
 
 void home_screen_dismiss_save_popup(void)
 {
+    if(!save_popup && !save_popup_timer) return;  /* nothing to dismiss */
+    devlog_printf("[HOME] Dismissing save popup");
     if(save_popup_timer) {
         lv_timer_del(save_popup_timer);
         save_popup_timer = NULL;
@@ -874,28 +877,45 @@ void home_screen_set_sensor_status(const char *status_text, bool is_error)
 static void save_popup_timer_cb(lv_timer_t *t)
 {
     (void)t;
+    devlog_printf("[HOME] Save popup auto-dismiss timer fired");
+    /* Timer is single-shot (repeat_count=1), LVGL auto-deletes it after this callback.
+       Clear our pointer so dismiss_save_popup() doesn't double-delete it. */
+    save_popup_timer = NULL;
     home_screen_dismiss_save_popup();
 }
 
-void home_screen_show_save_popup(uint32_t serial_num)
+static void save_popup_close_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if(code != LV_EVENT_CLICKED) return;
+    home_screen_dismiss_save_popup();
+}
+
+void home_screen_show_save_popup(uint32_t serial_num, uint8_t item_count, uint32_t total_qty, float total_weight)
 {
     home_screen_dismiss_save_popup();
 
+    devlog_printf("[HOME] Showing save popup S/N=%lu items=%u qty=%lu wt=%.1f",
+                  (unsigned long)serial_num, item_count, (unsigned long)total_qty, total_weight);
+
+    char buf[128];
     lv_obj_t *scr = lv_scr_act();
 
-    /* Semi-transparent overlay */
+    /* Full-screen overlay — tap anywhere to dismiss */
     save_popup = lv_obj_create(scr);
     lv_obj_remove_style_all(save_popup);
     lv_obj_set_size(save_popup, DISPLAY_WIDTH, DISPLAY_HEIGHT);
     lv_obj_set_style_bg_color(save_popup, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(save_popup, LV_OPA_50, 0);
-    lv_obj_align(save_popup, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_opa(save_popup, LV_OPA_70, 0);
+    lv_obj_center(save_popup);
     lv_obj_clear_flag(save_popup, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(save_popup, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(save_popup, save_popup_close_cb, LV_EVENT_CLICKED, NULL);
 
     /* Popup card */
     lv_obj_t *card = lv_obj_create(save_popup);
-    lv_obj_set_size(card, 560, 300);
-    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(card, 560, 340);
+    lv_obj_center(card);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x1E293B), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(card, 16, 0);
@@ -904,33 +924,58 @@ void home_screen_show_save_popup(uint32_t serial_num)
     lv_obj_set_style_shadow_width(card, 20, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(0x22C55E), 0);
     lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
+    lv_obj_set_style_pad_all(card, 15, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Close button (top-right, inside card) */
+    lv_obj_t *close_btn = lv_btn_create(card);
+    lv_obj_set_size(close_btn, 40, 40);
+    lv_obj_align(close_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x475569), 0);
+    lv_obj_set_style_radius(close_btn, 20, 0);
+    lv_obj_set_style_shadow_width(close_btn, 0, 0);
+    lv_obj_add_event_cb(close_btn, save_popup_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *close_lbl = lv_label_create(close_btn);
+    lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
+    lv_obj_center(close_lbl);
 
     /* Check mark / Saved label */
     lv_obj_t *check_lbl = lv_label_create(card);
     lv_obj_set_style_text_font(check_lbl, &lv_font_montserrat_36, 0);
     lv_obj_set_style_text_color(check_lbl, lv_color_hex(0x4ADE80), 0);
     lv_label_set_text(check_lbl, LV_SYMBOL_OK " Saved!");
-    lv_obj_align(check_lbl, LV_ALIGN_TOP_MID, 0, 38);
+    lv_obj_align(check_lbl, LV_ALIGN_TOP_MID, 0, 15);
 
-    /* Saved Serial Number */
+    /* Serial Number */
     lv_obj_t *sn_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(sn_lbl, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_font(sn_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(sn_lbl, lv_color_hex(0xFFFFFF), 0);
-    snprintf(g_format_buf, sizeof(g_format_buf), "Saved S/N: %lu", serial_num);
-    lv_label_set_text(sn_lbl, g_format_buf);
-    lv_obj_align(sn_lbl, LV_ALIGN_CENTER, 0, 20);
+    snprintf(buf, sizeof(buf), "S/N: %lu", (unsigned long)serial_num);
+    lv_label_set_text(sn_lbl, buf);
+    lv_obj_align(sn_lbl, LV_ALIGN_TOP_MID, 0, 70);
+
+    /* Invoice summary: items, qty, total weight */
+    lv_obj_t *info_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(info_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(info_lbl, lv_color_hex(0xCBD5E1), 0);
+    snprintf(buf, sizeof(buf), "Items: %u   |   Qty: %lu   |   Total: %.1f kg",
+             item_count, (unsigned long)total_qty, total_weight);
+    lv_label_set_text(info_lbl, buf);
+    lv_obj_set_style_text_align(info_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(info_lbl, LV_ALIGN_CENTER, 0, 20);
 
     /* Hint text */
     lv_obj_t *hint_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(hint_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(hint_lbl, lv_color_hex(0x94A3B8), 0);
-    lv_label_set_text(hint_lbl, "Place weight to dismiss");
-    lv_obj_align(hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_set_style_text_font(hint_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(hint_lbl, lv_color_hex(0x64748B), 0);
+    lv_label_set_text(hint_lbl, "Tap anywhere or place weight to dismiss");
+    lv_obj_align(hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -15);
 
     /* Auto-dismiss after 60 seconds */
     save_popup_timer = lv_timer_create(save_popup_timer_cb, 60000, NULL);
     lv_timer_set_repeat_count(save_popup_timer, 1);
+    devlog_printf("[HOME] Save popup timer created (60s)");
 }
 
 #ifdef __cplusplus

@@ -916,12 +916,23 @@ void app_controller_handle_ui_event(int event_id)
             devlog_printf("[CTRL] → Finalize S/N #%lu (%u items)",
                           saved_id, cnt);
             if (cnt > 0) {
+                /* Compute totals before commit clears the session */
+                uint32_t total_qty = 0;
+                float total_weight = 0.0f;
+                for(uint8_t i = 0; i < cnt; i++) {
+                    const invoice_item_t *it = invoice_session_get(i);
+                    if(it) {
+                        total_qty += it->qty;
+                        total_weight += it->weight * (float)it->qty;
+                    }
+                }
+
                 invoice_session_commit();
                 invoice_service_next();
                 uint32_t next_id = invoice_service_current_id();
                 devlog_printf("[CTRL] Saved. Next S/N #%lu", next_id);
-                /* Show popup with next serial number */
-                home_screen_show_save_popup(saved_id);
+                /* Show popup with invoice summary */
+                home_screen_show_save_popup(saved_id, cnt, total_qty, total_weight);
             } else {
                 devlog_printf("[CTRL] No items to finalize");
             }

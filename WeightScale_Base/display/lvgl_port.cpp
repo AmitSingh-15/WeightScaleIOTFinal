@@ -88,8 +88,9 @@ void lvgl_port_init(void)
     buf2 = NULL;
 
     if (!buf1) {
-        Serial.println("[LVGL] Buffer allocation failed");
-        while (1) delay(1000);
+        Serial.println("[LVGL] Buffer allocation failed — restarting in 3s");
+        delay(3000);
+        ESP.restart();
     }
 
     lv_disp_draw_buf_init(&draw_buf, buf1, buf2, buf_area);

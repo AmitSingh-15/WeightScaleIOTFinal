@@ -58,6 +58,10 @@ static unsigned long g_scale_init_ms = 0;
 static long g_stuck_last_raw = 0;
 static unsigned long g_stuck_raw_since = 0;
 
+/* Periodic diagnostic logging */
+static unsigned long g_last_diag_log_ms = 0;
+static const unsigned long DIAG_LOG_INTERVAL_MS = 3000;  /* log every 3s */
+
 static float ema(float prev, float input, float alpha)
 {
     return (alpha * input) + ((1.0f - alpha) * prev);
@@ -153,16 +157,22 @@ static void scale_task(void *p)
             if(last_valid > 1.0f && fabs(w) < 0.10f) {  /* heavy machine thresholds */
                 consecutive_fails++;
                 if(consecutive_fails < 3) {  /* was 5 — accept real removal faster */
+                    devlog_printf("[SCALE] Zero-spike rejected: raw=%ld cal=%.3f last_valid=%.3f (fail %d/3)",
+                                  raw, w, last_valid, consecutive_fails);
                     vTaskDelay(pdMS_TO_TICKS(20));
                     continue;
                 }
                 /* If 3+ consecutive "zeros", accept it as real (weight removed) */
+                devlog_printf("[SCALE] Zero-spike accepted as real removal after %d consecutive", consecutive_fails);
             }
             consecutive_fails = 0;
 
             /* Clamp small values to zero — heavy machine, sub-100g is noise */
             if(w < 0.0f) w = 0.0f;
             if(w < 0.10f) {
+                if(raw != 0 && w > 0.001f) {
+                    devlog_printf("[SCALE] Clamped to zero: raw=%ld cal=%.4f kg (below 0.10 threshold)", raw, w);
+                }
                 w = 0.0f;
                 raw = 0;
             }
@@ -265,11 +275,22 @@ static void scale_task(void *p)
                     g_hx711_status = HX711_OVERLOAD;
                 }
 
+                /* ---------- PERIODIC DIAGNOSTIC LOG ---------- */
+                if((now_ms - g_last_diag_log_ms) >= DIAG_LOG_INTERVAL_MS) {
+                    g_last_diag_log_ms = now_ms;
+                    devlog_printf("[SCALE] raw=%ld cal=%.3f filt=%.3f kg (status=%d)",
+                                  avg_raw, avg, filtered_weight, (int)g_hx711_status);
+                }
+
                 /* ---------- AUTO-ZERO ---------- */
                 if(filtered_weight <= RETURN_ZERO_THRESHOLD_KG) {
                     if(return_zero_since == 0) {
                         return_zero_since = now_ms;
                     } else if((now_ms - return_zero_since) >= RETURN_ZERO_MS) {
+                        if(filtered_weight > 0.01f) {
+                            devlog_printf("[SCALE] Return-to-zero: was %.3f kg (raw=%ld), below %.2f for %lums",
+                                          filtered_weight, avg_raw, RETURN_ZERO_THRESHOLD_KG, RETURN_ZERO_MS);
+                        }
                         filtered_weight = 0.0f;
                         last_valid = 0.0f;
                         last_valid_raw = 0;

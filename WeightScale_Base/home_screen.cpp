@@ -12,6 +12,7 @@
 #include "invoice_session_service.h"
 #include "time_service.h"
 #include "ota_service.h"
+#include "lvgl_port.h"         /* lvgl_port_lock / unlock */
 
 #ifdef LV_VERSION_MAJOR
 #ifdef __cplusplus
@@ -56,6 +57,10 @@ static lv_obj_t *save_popup = NULL;
 static lv_timer_t *save_popup_timer = NULL;
 static lv_timer_t *clock_timer = NULL;
 
+/* Restart confirmation popup */
+static lv_obj_t *restart_backdrop = NULL;
+static lv_obj_t *restart_popup = NULL;
+
 /* (weight font is fixed at montserrat_48 — weight_box height computed at build) */
 
 static void home_screen_refresh_clock(void)
@@ -99,6 +104,10 @@ static void home_screen_cleanup(void)
     if(save_popup_timer) { lv_timer_del(save_popup_timer); save_popup_timer = NULL; }
     if(save_popup && lv_obj_is_valid(save_popup)) { lv_obj_del(save_popup); }
     save_popup = NULL;
+    if(restart_popup && lv_obj_is_valid(restart_popup)) { lv_obj_del(restart_popup); }
+    restart_popup = NULL;
+    if(restart_backdrop && lv_obj_is_valid(restart_backdrop)) { lv_obj_del(restart_backdrop); }
+    restart_backdrop = NULL;
 }
 
 /* Called automatically when the home-screen parent is deleted */
@@ -106,6 +115,98 @@ static void home_screen_delete_cb(lv_event_t *e)
 {
     (void)e;
     home_screen_cleanup();
+}
+
+/* ===== RESTART CONFIRMATION POPUP ===== */
+
+static void restart_popup_dismiss(void)
+{
+    if(restart_popup && lv_obj_is_valid(restart_popup)) {
+        lv_obj_del(restart_popup);
+    }
+    restart_popup = NULL;
+    if(restart_backdrop && lv_obj_is_valid(restart_backdrop)) {
+        lv_obj_del(restart_backdrop);
+    }
+    restart_backdrop = NULL;
+}
+
+static void restart_confirm_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if(code != LV_EVENT_CLICKED) return;
+    restart_popup_dismiss();
+    if(event_cb) event_cb(UI_EVT_RESTART);
+}
+
+static void restart_cancel_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if(code != LV_EVENT_CLICKED) return;
+    restart_popup_dismiss();
+}
+
+static void show_restart_confirmation(void)
+{
+    if(restart_popup) return;  /* already showing */
+
+    lv_obj_t *scr = lv_scr_act();
+
+    /* Dark semi-transparent backdrop — blocks interaction with background */
+    restart_backdrop = lv_obj_create(scr);
+    lv_obj_remove_style_all(restart_backdrop);
+    lv_obj_set_size(restart_backdrop, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_obj_set_style_bg_color(restart_backdrop, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(restart_backdrop, LV_OPA_70, 0);
+    lv_obj_center(restart_backdrop);
+    lv_obj_clear_flag(restart_backdrop, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Popup dialog on top of backdrop */
+    restart_popup = lv_obj_create(scr);
+    lv_obj_set_size(restart_popup, 400, 200);
+    lv_obj_center(restart_popup);
+    lv_obj_set_style_bg_color(restart_popup, lv_color_hex(0x1E293B), 0);
+    lv_obj_set_style_bg_opa(restart_popup, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(restart_popup, lv_color_hex(0xEF4444), 0);
+    lv_obj_set_style_border_width(restart_popup, 2, 0);
+    lv_obj_set_style_radius(restart_popup, 12, 0);
+    lv_obj_set_style_pad_all(restart_popup, 20, 0);
+    lv_obj_clear_flag(restart_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(restart_popup);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xEF4444), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_label_set_text(title, LV_SYMBOL_WARNING " Restart Device?");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+
+    lv_obj_t *msg = lv_label_create(restart_popup);
+    lv_obj_set_style_text_color(msg, lv_color_hex(0xCBD5E1), 0);
+    lv_obj_set_style_text_font(msg, &lv_font_montserrat_16, 0);
+    lv_label_set_text(msg, "Device will restart. Unsaved data\nmay be lost.");
+    lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(msg, LV_ALIGN_CENTER, 0, -5);
+
+    /* Cancel button */
+    lv_obj_t *cancel_btn = lv_btn_create(restart_popup);
+    lv_obj_set_size(cancel_btn, 140, 44);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 10, 0);
+    lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x334155), 0);
+    lv_obj_add_event_cb(cancel_btn, restart_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_16, 0);
+    lv_label_set_text(cancel_lbl, "Cancel");
+    lv_obj_center(cancel_lbl);
+
+    /* Confirm button */
+    lv_obj_t *confirm_btn = lv_btn_create(restart_popup);
+    lv_obj_set_size(confirm_btn, 140, 44);
+    lv_obj_align(confirm_btn, LV_ALIGN_BOTTOM_RIGHT, -10, 0);
+    lv_obj_set_style_bg_color(confirm_btn, lv_color_hex(0xEF4444), 0);
+    lv_obj_add_event_cb(confirm_btn, restart_confirm_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *confirm_lbl = lv_label_create(confirm_btn);
+    lv_obj_set_style_text_font(confirm_lbl, &lv_font_montserrat_16, 0);
+    lv_label_set_text(confirm_lbl, LV_SYMBOL_POWER " Restart");
+    lv_obj_center(confirm_lbl);
 }
 
 static void btn_event_cb(lv_event_t *e)
@@ -126,13 +227,17 @@ static void btn_event_cb(lv_event_t *e)
         return;  /* Only respond to release events */
     }
 
-    Serial.println("[BTN] Button released!");
-    if(!event_cb) {
-        Serial.println("[BTN] ERROR: event_cb is NULL!");
+    uintptr_t id = (uintptr_t)lv_event_get_user_data(e);
+
+    /* Intercept restart — show confirmation popup instead of firing immediately */
+    if(id == UI_EVT_RESTART) {
+        show_restart_confirmation();
         return;
     }
-    uintptr_t id = (uintptr_t)lv_event_get_user_data(e);
-    Serial.printf("[BTN] Calling event_cb with id=%u\n", (unsigned int)id);
+
+    if(!event_cb) {
+        return;
+    }
     event_cb((int)id);
 }
 
@@ -615,27 +720,35 @@ void home_screen_create(lv_obj_t *parent)
 
 void home_screen_set_device(const char *name)
 {
+    if(!lvgl_port_lock(100)) return;
     if(lbl_device && lv_obj_is_valid(lbl_device))
     {
         snprintf(g_format_buf, sizeof(g_format_buf), "Device: %s", name);
         lv_label_set_text(lbl_device, g_format_buf);
     }
+    lvgl_port_unlock();
 }
 
 void home_screen_set_sync_status(const char *txt)
 {
+    if(!lvgl_port_lock(100)) return;
     if(lbl_sync && lv_obj_is_valid(lbl_sync))
         lv_label_set_text(lbl_sync,txt);
+    lvgl_port_unlock();
 }
 
 void home_screen_set_clock_text(const char *txt)
 {
+    if(!lvgl_port_lock(100)) return;
     if(lbl_clock && lv_obj_is_valid(lbl_clock))
         lv_label_set_text(lbl_clock, txt ? txt : "--:--");
+    lvgl_port_unlock();
 }
 
 void home_screen_refresh_invoice_details(void)
 {
+    if(!lvgl_port_lock(100)) return;
+
     uint8_t count = invoice_session_count();
     float total_weight = 0.0f;
 
@@ -672,11 +785,14 @@ void home_screen_refresh_invoice_details(void)
         snprintf(g_format_buf, sizeof(g_format_buf), "Total: %.1f kg", total_weight);
         lv_label_set_text(lbl_total_weight, g_format_buf);
     }
+
+    lvgl_port_unlock();
 }
 
 void home_screen_set_weight(float w)
 {
-    if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) return;
+    if(!lvgl_port_lock(100)) return;
+    if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) { lvgl_port_unlock(); return; }
 
     /* Dismiss save popup when new weight is detected from HX711 */
     if(w > 0.1f && save_popup) {
@@ -685,6 +801,7 @@ void home_screen_set_weight(float w)
 
     snprintf(g_format_buf, sizeof(g_format_buf), "%.1f", w);
     lv_label_set_text(lbl_weight, g_format_buf);
+    lvgl_port_unlock();
 }
 
 void home_screen_set_quantity(int qty)
@@ -695,27 +812,33 @@ void home_screen_set_quantity(int qty)
         keypad_value = qty;
         keypad_started = (qty > 1);
     }
-    if(!lbl_qty || !lv_obj_is_valid(lbl_qty)) return;
+    if(!lvgl_port_lock(100)) return;
+    if(!lbl_qty || !lv_obj_is_valid(lbl_qty)) { lvgl_port_unlock(); return; }
 
     snprintf(g_format_buf, sizeof(g_format_buf), "Qty: %d", qty);
     lv_label_set_text(lbl_qty, g_format_buf);
+    lvgl_port_unlock();
 }
 
 void home_screen_set_invoice(uint32_t id)
 {
-    if(!lbl_invoice || !lv_obj_is_valid(lbl_invoice)) return;
+    if(!lvgl_port_lock(100)) return;
+    if(!lbl_invoice || !lv_obj_is_valid(lbl_invoice)) { lvgl_port_unlock(); return; }
 
     snprintf(g_format_buf, sizeof(g_format_buf), "S/N %lu", id);
     lv_label_set_text(lbl_invoice, g_format_buf);
+    lvgl_port_unlock();
 }
 
 void home_screen_set_version(const char *ver)
 {
+    if(!lvgl_port_lock(100)) return;
     if(version_label && lv_obj_is_valid(version_label))
     {
         snprintf(g_format_buf, sizeof(g_format_buf), "v%s", ver);
         lv_label_set_text(version_label, g_format_buf);
     }
+    lvgl_port_unlock();
 }
 
 void home_screen_dismiss_save_popup(void)
@@ -730,12 +853,22 @@ void home_screen_dismiss_save_popup(void)
     save_popup = NULL;
 }
 
+/* Standalone version with its own lock — for callers outside LVGL context */
+void home_screen_dismiss_save_popup_safe(void)
+{
+    if(!lvgl_port_lock(100)) return;
+    home_screen_dismiss_save_popup();
+    lvgl_port_unlock();
+}
+
 void home_screen_set_sensor_status(const char *status_text, bool is_error)
 {
-    if(!lbl_sensor_status || !lv_obj_is_valid(lbl_sensor_status)) return;
+    if(!lvgl_port_lock(100)) return;
+    if(!lbl_sensor_status || !lv_obj_is_valid(lbl_sensor_status)) { lvgl_port_unlock(); return; }
     lv_label_set_text(lbl_sensor_status, status_text);
     lv_obj_set_style_text_color(lbl_sensor_status,
         is_error ? lv_color_hex(0xEF4444) : lv_color_hex(0x22C55E), 0);
+    lvgl_port_unlock();
 }
 
 static void save_popup_timer_cb(lv_timer_t *t)

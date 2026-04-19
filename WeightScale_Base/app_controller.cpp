@@ -849,9 +849,41 @@ void app_controller_handle_ui_event(int event_id)
 #endif
 
         case UI_EVT_RESTART:
+        {
             devlog_printf("[CTRL] → Restart requested by user");
+
+            /* Show "Restarting..." full-screen overlay so user sees feedback */
+            lv_obj_t *overlay = lv_obj_create(lv_scr_act());
+            lv_obj_remove_style_all(overlay);
+            lv_obj_set_size(overlay, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+            lv_obj_set_style_bg_color(overlay, lv_color_hex(0x0F172A), 0);
+            lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
+            lv_obj_center(overlay);
+
+            lv_obj_t *rlbl = lv_label_create(overlay);
+            lv_obj_set_style_text_color(rlbl, lv_color_hex(0xF8FAFC), 0);
+            lv_obj_set_style_text_font(rlbl, &lv_font_montserrat_28, 0);
+            lv_label_set_text(rlbl, LV_SYMBOL_REFRESH "  Restarting...");
+            lv_obj_center(rlbl);
+
+            /* Force LVGL to render the overlay before shutting down */
+            lv_refr_now(NULL);
+
+            /* Graceful shutdown sequence */
+            scale_service_suspend();
+
+#if ENABLE_CLOUD_SYNC
+            sync_service_deinit();
+#endif
+#if ENABLE_WIFI_SERVICE
+            wifi_service_disconnect();
+#endif
+            Serial.flush();
+            delay(300);   /* let services settle */
+
             ESP.restart();
             break;
+        }
 
         case UI_EVT_HISTORY:
             devlog_printf("[CTRL] → Open history");

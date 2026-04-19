@@ -136,7 +136,7 @@ void setup() {
     err = esp_ldo_acquire_channel(&ldo3_cfg, &ldo3_handle);
     if (err != ESP_OK) {
         MAIN_ERROR("LDO3 failed: %s", esp_err_to_name(err));
-        while (1) delay(1000);
+        delay(3000); ESP.restart();
     }
     MAIN_INFO("  ✓ LDO3 enabled (2.5V for MIPI D-PHY)");
 
@@ -150,7 +150,7 @@ void setup() {
     err = esp_ldo_acquire_channel(&ldo4_cfg, &ldo4_handle);
     if (err != ESP_OK) {
         MAIN_ERROR("LDO4 failed: %s", esp_err_to_name(err));
-        while (1) delay(1000);
+        delay(3000); ESP.restart();
     }
     MAIN_INFO("  ✓ LDO4 enabled (3.3V for I2C/Touch)\n");
 
@@ -163,20 +163,20 @@ void setup() {
     g_board = new Board();
     if (!g_board) {
         MAIN_ERROR("Failed to create Board instance");
-        while (1) delay(1000);
+        delay(3000); ESP.restart();
     }
 
     // Initialize the board hardware (bus setup, GPIO config)
     if (!g_board->init()) {
         MAIN_ERROR("Board::init() failed");
-        while (1) delay(1000);
+        delay(3000); ESP.restart();
     }
     MAIN_INFO("  ✓ Board hardware initialized");
 
     // Start the board (enable LCD output, touch input, backlight)
     if (!g_board->begin()) {
         MAIN_ERROR("Board::begin() failed");
-        while (1) delay(1000);
+        delay(3000); ESP.restart();
     }
     MAIN_INFO("  ✓ Board started (display active)\n");
 
@@ -190,7 +190,7 @@ void setup() {
     
     if (!lcd) {
         MAIN_ERROR("No LCD device from Board");
-        while (1) delay(1000);
+        delay(3000); ESP.restart();
     }
     MAIN_INFO("  ✓ LCD device obtained");
     

@@ -9,7 +9,8 @@ enum {
     UI_EVT_RESET_ALL,
     UI_EVT_CALIBRATE,
     UI_EVT_HOME,
-    UI_EVT_WIFI_DIRECT = 20        /* Home → WiFi list directly */
+    UI_EVT_WIFI_DIRECT = 20,       /* Home → WiFi list directly */
+    UI_EVT_RESTART = 21            /* Restart device */
 };
 
 /* Remove item events: UI_EVT_REMOVE_ITEM_BASE + index */

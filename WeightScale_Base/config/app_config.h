@@ -31,3 +31,49 @@
 #define SCALE_TASK_STACK_SIZE 12288
 #define SCALE_TASK_PRIORITY   1
 #define SCALE_TASK_CORE       1
+
+// WiFi/OTA task configuration
+#define WIFI_OTA_TASK_STACK_SIZE   8192    // 8KB — TLS + OTA needs headroom
+#define WIFI_OTA_TASK_PRIORITY     3       // Above scale(1), below LVGL
+#define WIFI_OTA_TASK_CORE         1
+
+// OTA timing
+#define OTA_CMD_COOLDOWN_MS        30000   // 30s between OTA check commands
+#define OTA_WIFI_SETTLE_MS         10000   // WiFi must be connected this long before OTA
+#define OTA_CHECK_INTERVAL_MS      30000   // 30s cooldown between version checks
+#define OTA_CHUNK_SIZE             512     // SDIO-friendly chunk size
+#define OTA_CHUNK_DELAY_MS         20      // SDIO breathing per chunk
+#define OTA_STALL_TIMEOUT_MS       15000   // 15s zero-progress = stall
+#define OTA_MAX_RETRIES            3       // retry download up to 3x
+#define OTA_HTTP_TIMEOUT_MS        10000   // 10s HTTP timeout
+
+// WiFi scan
+#define WIFI_SCAN_COOLDOWN_MS      8000    // 8s between scan starts
+#define WIFI_SCAN_MAX_APS          20
+
+// Sync timing
+#define SYNC_INTERVAL_MS           30000   // 30s between sync attempts
+#define SYNC_HTTPS_COOLDOWN_MS     10000   // 10s after WiFi connect before HTTPS
+#define SYNC_TRANSPORT_COOLDOWN_MS 60000   // 60s cooldown after transport failure
+
+// Weight stability
+#define WEIGHT_NOISE_FLOOR_KG      0.5f    // Below this = zero
+#define WEIGHT_STABILITY_KG        0.5f    // Jitter tolerance for stable detection
+#define WEIGHT_STABILITY_MS        400     // ms weight must be stable to auto-add
+#define WEIGHT_SNAP_STEP_KG        0.5f    // Snap resolution
+
+// HX711 health
+#define HX711_NO_DATA_TIMEOUT_MS   3000    // 3s no data = no sensor
+#define HX711_WARMUP_MS            5000    // 5s warmup after init
+#define HX711_STUCK_TIMEOUT_MS     5000    // 5s same raw value = stuck
+
+// Heap monitoring
+#define HEAP_CHECK_INTERVAL_MS     60000   // 60s between heap checks
+#define HEAP_LOW_THRESHOLD_BYTES   20480   // 20KB low-memory warning
+
+// Crash loop
+#define CRASH_LOOP_MAX_BOOTS       3       // >3 crashes = safe mode
+#define CRASH_COUNTER_CLEAR_MS     30000   // Clear crash counter after 30s stable
+
+// WiFi stability
+#define WIFI_STABLE_AFTER_MS       15000   // 15s connected = STABLE

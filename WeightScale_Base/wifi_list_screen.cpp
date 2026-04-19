@@ -28,12 +28,31 @@ static void scan_poll_cb(lv_timer_t *t);
 /* Static SSID storage — avoids strdup/free heap fragmentation */
 #define MAX_SCAN_APS 20
 static char ssid_store[MAX_SCAN_APS][33];
+static int8_t rssi_store[MAX_SCAN_APS];
+
+/* RSSI to signal icon helper */
+static const char* rssi_to_icon(int8_t rssi)
+{
+    if (rssi >= -50) return LV_SYMBOL_WIFI;        // Excellent
+    if (rssi >= -65) return LV_SYMBOL_WIFI;        // Good
+    if (rssi >= -75) return LV_SYMBOL_WIFI;        // Fair
+    return LV_SYMBOL_WARNING;                       // Weak
+}
+
+static const char* rssi_to_label(int8_t rssi)
+{
+    if (rssi >= -50) return "Excellent";
+    if (rssi >= -65) return "Good";
+    if (rssi >= -75) return "Fair";
+    return "Weak";
+}
 
 /* Saved network storage for per-row callbacks */
 #define MAX_SAVED_ROWS WIFI_MAX_SAVED
 static char saved_ssid_rows[MAX_SAVED_ROWS][33];
 static char saved_pwd_rows[MAX_SAVED_ROWS][65];
 static char forget_target_ssid[33];  /* SSID pending forget confirmation */
+static char connecting_target_ssid[33] = {0};  /* SSID currently being connected */
 
 static void ssid_clicked(lv_event_t *e)
 {
@@ -43,24 +62,29 @@ static void ssid_clicked(lv_event_t *e)
     /* If we have a saved password for this SSID, connect directly */
     char saved_pwd[65] = {0};
     if(storage_find_wifi_password(ssid_store[idx], saved_pwd, sizeof(saved_pwd))) {
-        /* ⭐ NEW: Use Core 1 task API to enqueue connect command */
+        /* Track which SSID we're connecting to */
+        strncpy(connecting_target_ssid, ssid_store[idx], sizeof(connecting_target_ssid) - 1);
+        connecting_target_ssid[sizeof(connecting_target_ssid) - 1] = 0;
+
         uint8_t ssid_len = strlen(ssid_store[idx]);
         uint8_t pwd_len = strlen(saved_pwd);
-        uint8_t payload[2 + 33 + 65];  /* len_ssid + len_pwd + ssid + pwd */
+        uint8_t payload[2 + 33 + 65];
         payload[0] = ssid_len;
         payload[1] = pwd_len;
         memcpy(&payload[2], ssid_store[idx], ssid_len);
         memcpy(&payload[2 + ssid_len], saved_pwd, pwd_len);
-        
+
         wifi_ota_task_enqueue(WIFI_TASK_CMD_CONNECT, payload, 2 + ssid_len + pwd_len);
-        
+
         wifi_list_screen_refresh();
         if(scan_poll_timer) lv_timer_del(scan_poll_timer);
         scan_poll_timer = lv_timer_create(scan_poll_cb, 500, NULL);
         return;
     }
 
-    /* No saved password — show password popup */
+    /* No saved password — show password popup (track target) */
+    strncpy(connecting_target_ssid, ssid_store[idx], sizeof(connecting_target_ssid) - 1);
+    connecting_target_ssid[sizeof(connecting_target_ssid) - 1] = 0;
     if(select_cb) select_cb(ssid_store[idx]);
 }
 
@@ -73,6 +97,7 @@ static void back_evt(lv_event_t *e)
         lv_timer_del(scan_poll_timer);
         scan_poll_timer = NULL;
     }
+    connecting_target_ssid[0] = 0;
     wifi_service_cancel_scan();
     if(back_cb) back_cb();
 }
@@ -81,8 +106,11 @@ static void saved_connect_clicked(lv_event_t *e)
 {
     uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
     if(idx >= MAX_SAVED_ROWS || saved_ssid_rows[idx][0] == 0) return;
-    
-    /* ⭐ NEW: Use Core 1 task API to enqueue connect command */
+
+    /* Track which SSID we're connecting to */
+    strncpy(connecting_target_ssid, saved_ssid_rows[idx], sizeof(connecting_target_ssid) - 1);
+    connecting_target_ssid[sizeof(connecting_target_ssid) - 1] = 0;
+
     uint8_t ssid_len = strlen(saved_ssid_rows[idx]);
     uint8_t pwd_len = strlen(saved_pwd_rows[idx]);
     uint8_t payload[2 + 33 + 65];
@@ -239,6 +267,10 @@ void wifi_list_screen_refresh(void)
         lv_obj_set_style_pad_top(sec, 8, 0);
         lv_obj_set_style_pad_bottom(sec, 2, 0);
 
+        /* Build scan lookup: check which saved SSIDs are visible in scan */
+        int scan_total = wifi_ota_task_get_scan_count();
+        uint8_t scan_ap_count = (scan_total >= 0) ? (uint8_t)scan_total : 0;
+
         for(uint8_t si = 0; si < saved_cnt; si++)
         {
             char s_ssid[33] = {0}, s_pwd[65] = {0};
@@ -256,17 +288,36 @@ void wifi_list_screen_refresh(void)
 
             /* Status for this specific SSID */
             bool is_connected = (ws == WIFI_CONNECTED && conn_ssid == s_ssid);
-            bool is_connecting = (ws == WIFI_CONNECTING);
+            bool is_connecting = (ws == WIFI_CONNECTING && strcmp(s_ssid, connecting_target_ssid) == 0);
 
-            const char *icon = is_connected ? LV_SYMBOL_WIFI : LV_SYMBOL_WARNING;
-            const char *status = is_connected ? " Connected"
-                               : is_connecting ? " Connecting..."
-                               : "";
+            /* Look up this saved SSID in scan results for availability + RSSI */
+            bool in_range = false;
+            int8_t saved_rssi = -127;
+            for(uint8_t ai = 0; ai < scan_ap_count; ai++) {
+                String scanned = wifi_ota_task_get_ssid(ai);
+                if(scanned.length() > 0 && strcmp(s_ssid, scanned.c_str()) == 0) {
+                    in_range = true;
+                    int8_t r = wifi_ota_task_get_rssi(ai);
+                    if(r > saved_rssi) saved_rssi = r;
+                }
+            }
+
+            /* Build display text */
+            String display;
+            if(is_connected) {
+                display = String(LV_SYMBOL_WIFI) + " " + s_ssid + " Connected";
+            } else if(is_connecting) {
+                display = String(LV_SYMBOL_WIFI) + " " + s_ssid + " Connecting...";
+            } else if(in_range) {
+                display = String(rssi_to_icon(saved_rssi)) + " " + s_ssid
+                        + "  (" + rssi_to_label(saved_rssi) + ")";
+            } else {
+                display = String(LV_SYMBOL_CLOSE) + " " + s_ssid + "  (Not in range)";
+            }
 
             lv_obj_t *lbl = lv_label_create(row);
             lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
-            lv_obj_set_style_text_color(lbl, COLOR_TEXT, 0);
-            String display = String(icon) + " " + s_ssid + status;
+            lv_obj_set_style_text_color(lbl, in_range || is_connected ? COLOR_TEXT : COLOR_MUTED, 0);
             lv_label_set_text(lbl, display.c_str());
             lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
 
@@ -282,8 +333,8 @@ void wifi_list_screen_refresh(void)
             lv_obj_add_event_cb(fbtn, forget_clicked, LV_EVENT_RELEASED,
                                 (void*)(uintptr_t)si);
 
-            /* Connect button (only if not already connected) */
-            if(!is_connected) {
+            /* Connect button — only if in range AND not already connected */
+            if(!is_connected && in_range) {
                 lv_obj_t *cbtn = lv_btn_create(row);
                 lv_obj_add_style(cbtn, &g_styles.btn_primary, 0);
                 lv_obj_set_size(cbtn, 110, 40);
@@ -311,6 +362,19 @@ void wifi_list_screen_refresh(void)
     int scan_status = wifi_ota_task_get_scan_count();
     uint8_t count = (scan_status >= 0) ? (uint8_t)scan_status : 0;
 
+    if(scan_status < 0)
+    {
+        /* Scan in progress — show animated indicator */
+        lv_obj_t *lbl = lv_label_create(list);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(lbl, COLOR_MUTED, 0);
+        lv_label_set_text(lbl, LV_SYMBOL_REFRESH "  Scanning for networks...");
+        lv_obj_set_width(lbl, lv_pct(100));
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_top(lbl, 30, 0);
+        return;
+    }
+
     if(count == 0)
     {
         lv_obj_t *lbl = lv_label_create(list);
@@ -328,7 +392,6 @@ void wifi_list_screen_refresh(void)
     uint8_t raw = (count > MAX_SCAN_APS) ? MAX_SCAN_APS : count;
     for(int i = 0; i < raw && unique_count < MAX_SCAN_APS; i++)
     {
-        /* ⭐ UPDATED: Use Core 1 task API */
         String ssid = wifi_ota_task_get_ssid(i);
         if(ssid.length() == 0) continue;                          /* skip hidden */
         if(!conn_ssid.isEmpty() && ssid == conn_ssid) continue;   /* skip connected */
@@ -340,34 +403,65 @@ void wifi_list_screen_refresh(void)
         }
         if(is_saved) continue;
 
-        /* Check for duplicate */
+        /* Check for duplicate — keep the one with stronger RSSI */
+        int8_t rssi = wifi_ota_task_get_rssi(i);
         bool dup = false;
         for(uint8_t j = 0; j < unique_count; j++) {
-            if(ssid == ssid_store[j]) { dup = true; break; }
+            if(ssid == ssid_store[j]) {
+                if(rssi > rssi_store[j]) rssi_store[j] = rssi;  // Keep stronger
+                dup = true; break;
+            }
         }
         if(dup) continue;
 
         strncpy(ssid_store[unique_count], ssid.c_str(), 32);
         ssid_store[unique_count][32] = 0;
+        rssi_store[unique_count] = rssi;
+        unique_count++;
+    }
 
-        lv_obj_t *btn = lv_list_add_btn(list, LV_SYMBOL_WIFI, ssid_store[unique_count]);
+    /* Sort by RSSI (strongest first) — simple insertion sort */
+    for(int i = 1; i < unique_count; i++) {
+        int8_t key_rssi = rssi_store[i];
+        char key_ssid[33];
+        memcpy(key_ssid, ssid_store[i], 33);
+        int j = i - 1;
+        while(j >= 0 && rssi_store[j] < key_rssi) {
+            rssi_store[j + 1] = rssi_store[j];
+            memcpy(ssid_store[j + 1], ssid_store[j], 33);
+            j--;
+        }
+        rssi_store[j + 1] = key_rssi;
+        memcpy(ssid_store[j + 1], key_ssid, 33);
+    }
+
+    /* Render sorted scan results with RSSI */
+    for(uint8_t i = 0; i < unique_count; i++) {
+        char display_buf[64];
+        snprintf(display_buf, sizeof(display_buf), "%s  %s  (%s)",
+                 rssi_to_icon(rssi_store[i]),
+                 ssid_store[i],
+                 rssi_to_label(rssi_store[i]));
+
+        lv_obj_t *btn = lv_list_add_btn(list, NULL, display_buf);
         lv_obj_add_style(btn, &g_styles.list_btn, 0);
         lv_obj_add_event_cb(btn, ssid_clicked, LV_EVENT_RELEASED,
-                            (void*)(uintptr_t)unique_count);
-        unique_count++;
+                            (void*)(uintptr_t)i);
     }
 }
 
-/* Timer callback — polls async scan status */
+/* Timer callback — polls async scan status and refreshes UI */
 static void scan_poll_cb(lv_timer_t *t)
 {
     /* ⭐ UPDATED: Use Core 1 task API */
     int status = wifi_ota_task_get_scan_count();
     wifi_state_t ws = wifi_ota_task_get_state();
-    if(status == -1) return;  /* still scanning */
 
+    /* Always refresh the list so results appear as soon as scan completes */
     wifi_list_screen_refresh();
-    if(ws != WIFI_CONNECTING) {
+
+    /* Stop polling once: scan is done AND not actively connecting */
+    if(status >= 0 && ws != WIFI_CONNECTING) {
         lv_timer_del(t);
         scan_poll_timer = NULL;
     }
@@ -376,9 +470,6 @@ static void scan_poll_cb(lv_timer_t *t)
 /* Start async scan and show scanning indicator */
 void wifi_list_screen_start_scan(void)
 {
-    /* ⭐ NEW: Cancel scan using Core 1 task API */
-    wifi_ota_task_enqueue(WIFI_TASK_CMD_CANCEL_SCAN, nullptr, 0);
-
     char saved_ssid[33] = {0};
     char saved_pwd[65] = {0};
     bool has_saved = storage_load_wifi_credentials(saved_ssid, sizeof(saved_ssid),
@@ -393,13 +484,14 @@ void wifi_list_screen_start_scan(void)
         return;
     }
 
-    /* Show saved network row immediately (if any), then start scan */
+    /* Show saved network rows immediately, with "Scanning..." for available */
     wifi_list_screen_refresh();
 
-    /* ⭐ NEW: Start async scan using Core 1 task API */
-    wifi_ota_task_enqueue(WIFI_TASK_CMD_START_SCAN, nullptr, 0);
+    /* ⭐ Force scan (payload[0]=1) bypasses cooldown for user-initiated scans */
+    uint8_t force_flag = 1;
+    wifi_ota_task_enqueue(WIFI_TASK_CMD_START_SCAN, &force_flag, 1);
 
-    /* Poll for completion every 500ms */
+    /* Poll for completion every 500ms — scan_poll_cb will refresh the list */
     if(scan_poll_timer) lv_timer_del(scan_poll_timer);
     scan_poll_timer = lv_timer_create(scan_poll_cb, 500, NULL);
 }

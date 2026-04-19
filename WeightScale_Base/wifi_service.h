@@ -25,6 +25,7 @@ void wifi_service_cancel_scan(void);
 int  wifi_service_scan_status(void);   // -1=scanning, -2=failed, >=0=count
 uint8_t wifi_service_get_ap_count(void);
 String wifi_service_get_ssid(uint8_t index);
+int8_t wifi_service_get_rssi(uint8_t index);
 
 void wifi_service_connect(const char *ssid, const char *password);
 void wifi_service_disconnect(void);
@@ -33,12 +34,8 @@ bool wifi_service_is_critical(void);
 unsigned long wifi_service_connected_since_ms(void);
 String wifi_service_get_connected_ssid(void);
 
-// ⭐ NEW: debug label for LVGL popup
-#ifdef LV_VERSION_MAJOR
-void wifi_service_set_debug_label(lv_obj_t *label);
-#else
+// Debug label (opaque pointer — no LVGL dependency in wifi_service)
 void wifi_service_set_debug_label(void *label);
-#endif
 
 #else  /* !ENABLE_WIFI_SERVICE */
 
@@ -52,16 +49,13 @@ inline void wifi_service_cancel_scan(void) {}
 inline int  wifi_service_scan_status(void) { return -2; }
 inline uint8_t wifi_service_get_ap_count(void) { return 0; }
 inline String wifi_service_get_ssid(uint8_t index) { return ""; }
+inline int8_t wifi_service_get_rssi(uint8_t index) { return -127; }
 inline void wifi_service_connect(const char *ssid, const char *password) {}
 inline void wifi_service_disconnect(void) {}
 inline void wifi_service_request_reconnect(void) {}
 inline bool wifi_service_is_critical(void) { return false; }
 inline unsigned long wifi_service_connected_since_ms(void) { return 0; }
 inline String wifi_service_get_connected_ssid(void) { return ""; }
-#ifdef LV_VERSION_MAJOR
-inline void wifi_service_set_debug_label(lv_obj_t *label) {}
-#else
 inline void wifi_service_set_debug_label(void *label) {}
-#endif
 
 #endif  /* ENABLE_WIFI_SERVICE */

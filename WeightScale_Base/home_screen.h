@@ -27,6 +27,7 @@ void home_screen_set_version(const char *ver);
 
 void home_screen_show_save_popup(uint32_t serial_num);
 void home_screen_dismiss_save_popup(void);
+void home_screen_set_sensor_status(const char *status_text, bool is_error);
 
 }  // extern "C"
 
@@ -46,6 +47,7 @@ void home_screen_refresh_invoice_details(void);
 void home_screen_set_version(const char *ver);
 void home_screen_show_save_popup(uint32_t serial_num);
 void home_screen_dismiss_save_popup(void);
+void home_screen_set_sensor_status(const char *status_text, bool is_error);
 
 }  // extern "C"
 

@@ -573,7 +573,12 @@ lv_timer_create([](lv_timer_t *t){
     ota_status_label = lv_label_create(card);
     lv_obj_set_style_text_font(ota_status_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(ota_status_label, ui_theme_muted(), 0);
-    lv_label_set_text(ota_status_label, "OTA Status: Idle");
+    {
+        String ver = ota_service_stored_version();
+        if(ver.length() == 0) ver = ota_service_current_version();
+        String status_text = "Firmware: v" + ver;
+        lv_label_set_text(ota_status_label, status_text.c_str());
+    }
     lv_obj_align(ota_status_label, LV_ALIGN_TOP_LEFT, 10, 150);
     lv_obj_set_width(ota_status_label, 700);
 

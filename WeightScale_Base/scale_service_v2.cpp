@@ -1,6 +1,8 @@
 #include "scale_service_v2.h"
+#include "config/app_config.h"
 #include <HX711.h>
 #include <math.h>
+#include <esp_task_wdt.h>
 #include "devlog.h"
 
 #define HX711_DOUT 48
@@ -47,6 +49,15 @@ static unsigned long auto_zero_last_tare = 0;
 static bool auto_zero_was_loaded = false;  /* track if weight was on scale recently */
 static unsigned long return_zero_since = 0;
 
+/* HX711 status tracking */
+static volatile hx711_status_t g_hx711_status = HX711_NO_SENSOR;
+static unsigned long g_last_hx711_read_ms = 0;
+static unsigned long g_scale_init_ms = 0;
+
+/* HX711 STUCK detection (Req 6): raw unchanged >5s = stuck */
+static long g_stuck_last_raw = 0;
+static unsigned long g_stuck_raw_since = 0;
+
 static float ema(float prev, float input, float alpha)
 {
     return (alpha * input) + ((1.0f - alpha) * prev);
@@ -55,12 +66,18 @@ static float ema(float prev, float input, float alpha)
 static void scale_task(void *p)
 {
     scale.begin(HX711_DOUT, HX711_SCK);
-    delay(3000);
+    vTaskDelay(pdMS_TO_TICKS(3000));  /* yield to other tasks during HX711 settle */
 
     scale.set_scale(activeProfile.scale);
     scale.tare();
 
-    const int SAMPLE_COUNT = 4;      // was 8 — fill buffer in 100ms instead of 320ms
+    g_scale_init_ms = millis();
+    g_hx711_status = HX711_STABILIZING;
+
+    /* Register with task watchdog (30s timeout) */
+    esp_task_wdt_add(NULL);
+
+    const int SAMPLE_COUNT = 4;
     float samples[SAMPLE_COUNT];
     long raw_samples[SAMPLE_COUNT];
     int index = 0;
@@ -69,9 +86,15 @@ static void scale_task(void *p)
     float last_valid = 0;
 
     int consecutive_fails = 0;
+    uint8_t wdt_counter = 0;
 
     while (true)
     {
+        /* Feed watchdog every ~10 iterations (~250ms) */
+        if(++wdt_counter >= 10) {
+            esp_task_wdt_reset();
+            wdt_counter = 0;
+        }
         /* Handle filter reset request from auto-zero calibration */
         if(g_filter_reset_pending) {
             g_filter_reset_pending = false;
@@ -90,9 +113,32 @@ static void scale_task(void *p)
 
         if (scale.is_ready())
         {
+            g_last_hx711_read_ms = millis();
+
+            /* Update status based on calibration and warmup */
+            if (!activeCal.valid) {
+                g_hx711_status = HX711_CAL_REQUIRED;
+            } else if ((millis() - g_scale_init_ms) < HX711_WARMUP_MS) {
+                g_hx711_status = HX711_STABILIZING;
+            } else {
+                g_hx711_status = HX711_READY;
+            }
+
             /* Read tare-adjusted raw counts once here. This task is the only
                code path allowed to talk to HX711 directly. */
             long raw = scale.get_value(1);  /* was 3 — trimmed avg handles noise, no need to block here */
+
+            /* === HX711 STUCK detection (Req 6) === */
+            if (raw != g_stuck_last_raw) {
+                g_stuck_last_raw = raw;
+                g_stuck_raw_since = millis();
+            } else if (g_stuck_raw_since > 0 &&
+                       (millis() - g_stuck_raw_since) >= HX711_STUCK_TIMEOUT_MS) {
+                if (g_hx711_status == HX711_READY) {
+                    g_hx711_status = HX711_STUCK;
+                    devlog_printf("[SCALE] HX711 STUCK — raw unchanged for %lums", HX711_STUCK_TIMEOUT_MS);
+                }
+            }
 
             float w;
             if(activeCal.valid) {
@@ -214,6 +260,11 @@ static void scale_task(void *p)
                     );
                 }
 
+                /* Overload detection */
+                if (activeCal.valid && filtered_weight > (float)activeCal.max_capacity * 1.1f) {
+                    g_hx711_status = HX711_OVERLOAD;
+                }
+
                 /* ---------- AUTO-ZERO ---------- */
                 if(filtered_weight <= RETURN_ZERO_THRESHOLD_KG) {
                     if(return_zero_since == 0) {
@@ -263,7 +314,11 @@ static void scale_task(void *p)
         }
         else
         {
-            /* HX711 not ready — don't spam, just wait */
+            /* HX711 not ready — check for no-sensor timeout */
+            if (g_last_hx711_read_ms > 0 &&
+                (millis() - g_last_hx711_read_ms) > HX711_NO_DATA_TIMEOUT_MS) {
+                g_hx711_status = HX711_NO_SENSOR;
+            }
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
@@ -378,6 +433,11 @@ void scale_service_set_cal_profile(const cal_profile_t *cp)
 const cal_profile_t* scale_service_get_cal_profile(void)
 {
     return &activeCal;
+}
+
+hx711_status_t scale_service_get_status(void)
+{
+    return g_hx711_status;
 }
 
 bool scale_service_should_add_item(float *stable_weight)

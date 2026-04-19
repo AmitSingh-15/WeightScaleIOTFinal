@@ -1,4 +1,4 @@
-#include "app_config.h"  /* Must be first for feature flags */
+#include "config/app_config.h"  /* Must be first for feature flags */
 
 #if ENABLE_CLOUD_SYNC
 
@@ -10,6 +10,7 @@
 #include "wifi_service.h"
 #include "ota_service.h"
 #include "devlog.h"
+#include <esp_task_wdt.h>
 
 // Forward for deinit
 static HTTPClient *g_active_http = nullptr;
@@ -30,9 +31,7 @@ static const char *PROD_HEALTH_URL =
 static const char *PROD_BULK_URL =
 "https://etranscargo.in/weightscale/api/WeightIngestion/bulk";
 
-static const unsigned long SYNC_INTERVAL_MS = 30000; // 30 seconds
-static const unsigned long HTTPS_STARTUP_COOLDOWN_MS = 10000;
-static const unsigned long SYNC_TRANSPORT_COOLDOWN_MS = 60000;
+static const unsigned long HTTPS_STARTUP_COOLDOWN_MS = SYNC_HTTPS_COOLDOWN_MS;
 
 static unsigned long last_sync_attempt = 0;
 static bool sync_busy = false;
@@ -118,22 +117,23 @@ void sync_service_init(void)
 }
 
 /* =========================================================
-   JSON ESCAPE
+   JSON ESCAPE — writes into caller-provided buffer
 ========================================================= */
 
-static String escape_json(const String &input)
+static size_t escape_json_buf(const char *input, char *out, size_t out_size)
 {
-    String out;
-    for (size_t i = 0; i < input.length(); i++)
+    size_t pos = 0;
+    for (size_t i = 0; input[i] && pos < out_size - 2; i++)
     {
         char c = input[i];
-        if (c == '\"') out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\r') out += "\\r";
-        else out += c;
+        if (c == '\"' && pos < out_size - 3) { out[pos++] = '\\'; out[pos++] = '\"'; }
+        else if (c == '\\' && pos < out_size - 3) { out[pos++] = '\\'; out[pos++] = '\\'; }
+        else if (c == '\n' && pos < out_size - 3) { out[pos++] = '\\'; out[pos++] = 'n'; }
+        else if (c == '\r' && pos < out_size - 3) { out[pos++] = '\\'; out[pos++] = 'r'; }
+        else out[pos++] = c;
     }
-    return out;
+    out[pos] = '\0';
+    return pos;
 }
 
 /* =========================================================
@@ -145,25 +145,29 @@ static uint32_t g_syncing_indices[64];
 static uint32_t g_syncing_count = 0;
 
 /* =========================================================
-   BUILD PAYLOAD (FIXED)
+   BUILD PAYLOAD — uses static buffer to avoid heap fragmentation
 ========================================================= */
 
-static String build_payload(void)
+// Static buffer: ~4KB is enough for 64 weights * ~12 chars + overhead
+static char g_payload_buf[4096];
+
+static const char* build_payload(void)
 {
     uint32_t count = storage_get_record_count();
     if (count == 0)
-        return "";
+        return nullptr;
 
     char devname[64] = {0};
     storage_load_device_name(devname, sizeof(devname));
     uint32_t devId = storage_load_device_id();
 
-    String safeName = escape_json(String(devname));
+    char safeName[128];
+    escape_json_buf(devname, safeName, sizeof(safeName));
 
     g_syncing_count = 0;
     g_syncing_invoice_id = 0;
 
-    // 👉 pick first unsynced invoice
+    // Pick first unsynced invoice
     for (uint32_t i = 0; i < count; i++)
     {
         invoice_record_t rec;
@@ -175,9 +179,9 @@ static String build_payload(void)
     }
 
     if (g_syncing_invoice_id == 0)
-        return "";
+        return nullptr;
 
-    // 👉 collect records for that invoice
+    // Collect records for that invoice
     for (uint32_t i = 0; i < count; i++)
     {
         invoice_record_t rec;
@@ -191,10 +195,14 @@ static String build_payload(void)
     }
 
     if (g_syncing_count == 0)
-        return "";
+        return nullptr;
 
     uint32_t total_qty = 0;
-    String weightsArr = "[";
+
+    // Build weights array into a temp portion of the buffer
+    char weights_buf[2048];
+    int wpos = 0;
+    weights_buf[wpos++] = '[';
 
     for (uint32_t j = 0; j < g_syncing_count; j++)
     {
@@ -203,21 +211,33 @@ static String build_payload(void)
 
         total_qty += rec.quantity;
 
-        if (j > 0) weightsArr += ",";
-        weightsArr += String(rec.total_weight, 3);
+        if (j > 0 && wpos < (int)sizeof(weights_buf) - 1)
+            weights_buf[wpos++] = ',';
+
+        int written = snprintf(weights_buf + wpos, sizeof(weights_buf) - wpos, "%.3f", rec.total_weight);
+        if (written > 0) wpos += written;
     }
 
-    weightsArr += "]";
+    if (wpos < (int)sizeof(weights_buf) - 1)
+        weights_buf[wpos++] = ']';
+    weights_buf[wpos] = '\0';
 
-    String s = "{";
-    s += "\"invoiceId\":" + String(g_syncing_invoice_id) + ",";
-    s += "\"deviceId\":\"" + String(devId) + "\",";
-    s += "\"quantity\":" + String(total_qty) + ",";
-    s += "\"deviceName\":\"" + safeName + "\",";
-    s += "\"weightsInKg\":" + weightsArr;
-    s += "}";
+    // Build final JSON — check for truncation
+    int written = snprintf(g_payload_buf, sizeof(g_payload_buf),
+             "{\"invoiceId\":%lu,\"deviceId\":\"%lu\",\"quantity\":%lu,\"deviceName\":\"%s\",\"weightsInKg\":%s}",
+             (unsigned long)g_syncing_invoice_id,
+             (unsigned long)devId,
+             (unsigned long)total_qty,
+             safeName,
+             weights_buf);
 
-    return s;
+    if (written < 0 || written >= (int)sizeof(g_payload_buf)) {
+        devlog_printf("[SYNC] Payload too large (%d bytes), skipping", written);
+        g_syncing_count = 0;
+        return nullptr;
+    }
+
+    return g_payload_buf;
 }
 
 /* =========================================================
@@ -330,7 +350,9 @@ void sync_service_loop(void)
         return;
     }
 
+    esp_task_wdt_reset();  /* feed WDT before blocking HTTP */
     int healthCode = http.GET();
+    esp_task_wdt_reset();  /* feed WDT after blocking HTTP */
     String healthResp;
     if (healthCode > 0) {
         healthResp = http.getString();
@@ -353,14 +375,14 @@ void sync_service_loop(void)
 
     /* BUILD */
 
-    String postBody = build_payload();
-    if (postBody.length() == 0)
+    const char* postBody = build_payload();
+    if (postBody == nullptr || postBody[0] == '\0')
     {
         finish_sync_attempt();
         return;
     }
 
-    devlog_printf("[SYNC] POST JSON: %s", postBody.c_str());
+    devlog_printf("[SYNC] POST JSON: %s", postBody);
 
     /* POST */
 
@@ -374,7 +396,9 @@ void sync_service_loop(void)
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Connection", "close");
 
-    int postCode = http.POST(postBody);
+    esp_task_wdt_reset();  /* feed WDT before blocking HTTP */
+    int postCode = http.POST((uint8_t*)postBody, strlen(postBody));
+    esp_task_wdt_reset();  /* feed WDT after blocking HTTP */
     String resp;
     if (postCode > 0) {
         resp = http.getString();

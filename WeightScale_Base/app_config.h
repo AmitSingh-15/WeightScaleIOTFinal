@@ -39,7 +39,7 @@
 
 // Stack configuration - AGGRESSIVE reduction
 // Reduced from 8192 to 4096 bytes (still sufficient for WiFi/OTA tasks)
-#define SCALE_TASK_STACK_SIZE 4096
+#define SCALE_TASK_STACK_SIZE 8192
 #define SCALE_TASK_PRIORITY   1
 #define SCALE_TASK_CORE       1
 

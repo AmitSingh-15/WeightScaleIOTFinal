@@ -1,5 +1,6 @@
 #include "app/app_controller.h"
 #include "config/app_config.h"  // Ensure app_config.h is included first
+#include "system_state.h"
 #include "ui_events.h"
 #include "devlog.h"
 #include <math.h>
@@ -62,8 +63,8 @@ static float g_manual_offset = 0.0f;   // +/- kg added to non-zero readings
 
 static float normalize_weight_for_ui_and_items(float weight)
 {
-    if (weight < 0.5f) return 0.0f;  /* heavy machine — under 500g is noise */
-    return roundf(weight * 2.0f) / 2.0f;  /* snap to 0.5 kg steps: 1.2→1.0, 1.3→1.5, 1.8→2.0 */
+    if (weight < WEIGHT_NOISE_FLOOR_KG) return 0.0f;
+    return roundf(weight / WEIGHT_SNAP_STEP_KG) * WEIGHT_SNAP_STEP_KG;
 }
 
 /* ===== TEST MODE ===== */
@@ -100,7 +101,7 @@ typedef enum {
 
 static wifi_state_ex_t g_wifi_state = WIFI_STATE_IDLE;
 static unsigned long g_wifi_connected_time = 0;
-static bool g_network_busy = false;
+static volatile bool g_wifi_state_changed = false;  /* Core 1 sets, Core 0 reads */
 #endif
 
 /* ========================================================
@@ -114,7 +115,9 @@ void app_controller_init(void)
         return;
     }
 
-    devlog_printf("[CTRL] ✓ Initializing app controller");
+    devlog_printf("[CTRL] Initializing app controller");
+
+    system_state_transition(SYS_INIT);
 
     /* ===== CRASH LOOP PROTECTION ===== */
     {
@@ -125,9 +128,10 @@ void app_controller_init(void)
         boot_prefs.putUChar("crashes", crash_count);
         boot_prefs.end();
         devlog_printf("[CTRL] Boot crash counter: %d", crash_count);
-        if (crash_count > 3) {
+        if (crash_count > CRASH_LOOP_MAX_BOOTS) {
             g_wifi_safe = false;
-            devlog_printf("[CTRL] ⚠ Crash loop detected (%d crashes). WiFi DISABLED.", crash_count);
+            system_state_transition(SYS_RECOVERY);
+            devlog_printf("[CTRL] Crash loop detected (%d crashes). WiFi DISABLED.", crash_count);
             devlog_printf("[CTRL] Power-cycle the device to re-enable WiFi.");
         }
     }
@@ -170,15 +174,13 @@ void app_controller_init(void)
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         // Register our internal WiFi callback
         wifi_ota_task_register_state_callback([](wifi_state_t state) {
-
+            /* CRITICAL: This runs on Core 1! Do NOT call LVGL here (Req 8). */
             g_wifi_connected = (state == WIFI_CONNECTED);
 
             if(state == WIFI_CONNECTED) {
                 g_wifi_state = WIFI_STATE_CONNECTED;
                 g_wifi_connected_time = millis();
-
                 time_service_request_ntp_sync();
-                devlog_printf("[CTRL] NTP sync requested (WiFi online)");
             }
             else if(state == WIFI_CONNECTING) {
                 g_wifi_state = WIFI_STATE_CONNECTING;
@@ -187,24 +189,18 @@ void app_controller_init(void)
                 g_wifi_state = WIFI_STATE_FAILED;
             }
 
-            const char *status;
-            if(state == WIFI_CONNECTED) status = "Online";
-            else if(state == WIFI_CONNECTING) status = "Connecting...";
-            else status = "Offline";
+            /* Signal Core 0 loop to update UI */
+            g_wifi_state_changed = true;
 
-            home_screen_set_sync_status(status);
-
-            if (g_sync_status_cb) {
-                g_sync_status_cb(status);
-            }
-
-            devlog_printf("[CTRL] WiFi state: %s", status);
+            devlog_printf("[CTRL] WiFi state: %s",
+                          state == WIFI_CONNECTED ? "Online" :
+                          state == WIFI_CONNECTING ? "Connecting..." : "Offline");
         });
 
         devlog_printf("[CTRL] ✓ WiFi task initialized on Core 1");
     } else {
         devlog_printf("[CTRL] ⊘ WiFi skipped (crash loop protection)");
-        home_screen_set_sync_status("Safe Mode");
+        if (g_sync_status_cb) g_sync_status_cb("Safe Mode");
     }
 #else
     devlog_printf("[CTRL] ⊘ WiFi service DISABLED (app_config.h)");
@@ -214,6 +210,11 @@ void app_controller_init(void)
     if (g_wifi_safe) {
         ota_service_init();
         devlog_printf("[CTRL] \u2713 OTA service initialized");
+
+        /* Show firmware version on home screen */
+        String ver = ota_service_stored_version();
+        if(ver.length() == 0) ver = ota_service_current_version();
+        home_screen_set_version(ver.c_str());
     }
 #endif
 
@@ -240,8 +241,13 @@ void app_controller_init(void)
     if(storage_load_light_mode())
         ui_styles_set_theme(true);
 
-    devlog_printf("[CTRL] ✓ All services initialized");
+    devlog_printf("[CTRL] All services initialized");
     g_initialized = true;
+
+    // Transition to IDLE if not in RECOVERY mode
+    if (system_state_get() != SYS_RECOVERY) {
+        system_state_transition(SYS_IDLE);
+    }
 }
 
 /* ========================================================
@@ -253,13 +259,25 @@ void app_controller_loop(void)
     if (!g_initialized) return;
     // ===== WIFI STABILITY CHECK =====
     if (g_wifi_state == WIFI_STATE_CONNECTED) {
-        if (millis() - g_wifi_connected_time > 15000) {
+        if (millis() - g_wifi_connected_time > WIFI_STABLE_AFTER_MS) {
             g_wifi_state = WIFI_STATE_STABLE;
             devlog_printf("[WIFI] Connection STABLE");
         }
     }
-    /* Clear crash counter after 30s of stable running */
-    if (!g_crash_counter_cleared && millis() > 30000) {
+
+    /* ===== WIFI STATE → UI UPDATE (Req 8: Core 0 only) ===== */
+    if (g_wifi_state_changed) {
+        g_wifi_state_changed = false;
+        const char *status;
+        if (g_wifi_connected)       status = "Online";
+        else if (g_wifi_state == WIFI_STATE_CONNECTING) status = "Connecting...";
+        else                        status = "Offline";
+
+        home_screen_set_sync_status(status);
+        if (g_sync_status_cb) g_sync_status_cb(status);
+    }
+    /* Clear crash counter after stable running */
+    if (!g_crash_counter_cleared && millis() > CRASH_COUNTER_CLEAR_MS) {
         g_crash_counter_cleared = true;
         Preferences boot_prefs;
         boot_prefs.begin("boot", false);
@@ -268,14 +286,55 @@ void app_controller_loop(void)
         devlog_printf("[CTRL] Crash counter cleared (stable boot)");
     }
 
-#if ENABLE_CLOUD_SYNC
-if (g_wifi_safe && g_wifi_state == WIFI_STATE_STABLE && !g_network_busy) {
-    sync_service_loop();
-}
-#endif
+    /* ===== HEAP MONITORING ===== */
+    {
+        static unsigned long last_heap_check = 0;
+        if (millis() - last_heap_check > HEAP_CHECK_INTERVAL_MS) {
+            last_heap_check = millis();
+            size_t free_heap = esp_get_free_heap_size();
+            size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            devlog_printf("[HEAP] Free: %u bytes, Largest block: %u bytes",
+                          (unsigned)free_heap, (unsigned)largest_block);
+            if (free_heap < HEAP_LOW_THRESHOLD_BYTES) {
+                devlog_printf("[HEAP] WARNING: Low memory! (%u bytes free)", (unsigned)free_heap);
+            }
+        }
+    }
+
+    /* ===== SYNC: Runs on Core 1 via wifi_ota_task (Req 2) ===== */
+    /* REMOVED: sync_service_loop() — now auto-scheduled in wifi_ota_worker_task */
     /* ⭐ REMOVED: wifi_service_loop() — now runs on Core 1 task */
 
     app_controller_run_midnight_clear_check();
+
+    /* ===== HX711 SENSOR STATUS UPDATE (every 2s) ===== */
+    {
+        static unsigned long last_status_update = 0;
+        if (millis() - last_status_update > 2000) {
+            last_status_update = millis();
+            hx711_status_t st = scale_service_get_status();
+            switch (st) {
+                case HX711_READY:
+                    home_screen_set_sensor_status(LV_SYMBOL_OK " Sensor: Ready", false);
+                    break;
+                case HX711_STABILIZING:
+                    home_screen_set_sensor_status(LV_SYMBOL_REFRESH " Sensor: Stabilizing...", false);
+                    break;
+                case HX711_NO_SENSOR:
+                    home_screen_set_sensor_status(LV_SYMBOL_WARNING " Sensor: Not detected!", true);
+                    break;
+                case HX711_CAL_REQUIRED:
+                    home_screen_set_sensor_status(LV_SYMBOL_WARNING " Sensor: Calibration needed", true);
+                    break;
+                case HX711_OVERLOAD:
+                    home_screen_set_sensor_status(LV_SYMBOL_WARNING " Sensor: OVERLOAD!", true);
+                    break;
+                case HX711_STUCK:
+                    home_screen_set_sensor_status(LV_SYMBOL_WARNING " Sensor: STUCK!", true);
+                    break;
+            }
+        }
+    }
 
     if (g_test_mode) {
         unsigned long now = millis();
@@ -299,7 +358,7 @@ if (g_wifi_safe && g_wifi_state == WIFI_STATE_STABLE && !g_network_busy) {
         if (g_weight_update_cb) g_weight_update_cb(w);
     }
 
-    if (w < 0.50f) {  /* heavy machine — under 500g means empty */
+    if (w < WEIGHT_NOISE_FLOOR_KG) {  /* under noise floor means empty */
         if (g_weight_flow_state != WEIGHT_WAIT_FOR_LOAD) {
             g_weight_flow_state = WEIGHT_WAIT_FOR_LOAD;
             g_stable_weight = 0.0f;
@@ -315,11 +374,11 @@ if (g_wifi_safe && g_wifi_state == WIFI_STATE_STABLE && !g_network_busy) {
                 break;
 
             case WEIGHT_WAIT_FOR_STABLE:
-                if (fabsf(w - g_stable_weight) >= 0.50f) {  /* heavy machine — 500g jitter ok */
+                if (fabsf(w - g_stable_weight) >= WEIGHT_STABILITY_KG) {
                     g_stable_weight = w;
                     g_stable_start = millis();
                 } else if (g_stable_start != 0 &&
-                           (millis() - g_stable_start) > 400) {  /* was 600ms */
+                           (millis() - g_stable_start) > WEIGHT_STABILITY_MS) {
                     invoice_session_add_weight_entry(w);
                     invoice_session_set_selected_qty(1);
                     app_controller_notify_invoice_update();
@@ -681,17 +740,16 @@ static void settings_password_popup_show(void)
     lv_obj_add_style(kb, &g_styles.kb_bg, LV_PART_MAIN);
     lv_obj_add_style(kb, &g_styles.kb_btn, LV_PART_ITEMS);
 
-    /* Store overlay pointer in keyboard user_data for cleanup */
-    struct pwd_ctx {
-        lv_obj_t *overlay;
-        lv_obj_t *err_lbl;
-    };
-    pwd_ctx *ctx = new pwd_ctx{overlay, err_lbl};
+    /* Store overlay pointer — static to avoid heap alloc + double-free.
+       Only one password popup exists at a time. */
+    static lv_obj_t *s_pwd_overlay = NULL;
+    static lv_obj_t *s_pwd_err_lbl = NULL;
+    s_pwd_overlay = overlay;
+    s_pwd_err_lbl = err_lbl;
 
     lv_obj_add_event_cb(kb, [](lv_event_t *e) {
         lv_event_code_t code = lv_event_get_code(e);
-        pwd_ctx *c = (pwd_ctx *)lv_event_get_user_data(e);
-        if(!c) return;
+        if(!s_pwd_overlay) return;
 
         lv_obj_t *kb_obj = lv_event_get_target(e);
         lv_obj_t *ta_obj = lv_keyboard_get_textarea(kb_obj);
@@ -700,8 +758,9 @@ static void settings_password_popup_show(void)
             const char *text = lv_textarea_get_text(ta_obj);
             if(text && strcmp(text, SETTINGS_PASSWORD) == 0) {
                 /* Password correct — open settings */
-                lv_obj_t *ov = c->overlay;
-                delete c;
+                lv_obj_t *ov = s_pwd_overlay;
+                s_pwd_overlay = NULL;
+                s_pwd_err_lbl = NULL;
                 lv_obj_del(ov);
 
                 scale_service_suspend();
@@ -721,24 +780,25 @@ static void settings_password_popup_show(void)
                 devlog_printf("[CTRL] Settings unlocked");
             } else {
                 /* Wrong password */
-                lv_label_set_text(c->err_lbl, "Wrong password!");
+                if(s_pwd_err_lbl) lv_label_set_text(s_pwd_err_lbl, "Wrong password!");
                 lv_textarea_set_text(ta_obj, "");
             }
         }
         if(code == LV_EVENT_CANCEL) {
-            lv_obj_t *ov = c->overlay;
-            delete c;
-            lv_obj_del(ov);
+            lv_obj_t *ov = s_pwd_overlay;
+            s_pwd_overlay = NULL;
+            s_pwd_err_lbl = NULL;
+            if(ov) lv_obj_del(ov);
         }
-    }, LV_EVENT_READY, (void*)ctx);
+    }, LV_EVENT_READY, NULL);
 
     lv_obj_add_event_cb(kb, [](lv_event_t *e) {
-        pwd_ctx *c = (pwd_ctx *)lv_event_get_user_data(e);
-        if(!c) return;
-        lv_obj_t *ov = c->overlay;
-        delete c;
+        if(!s_pwd_overlay) return;
+        lv_obj_t *ov = s_pwd_overlay;
+        s_pwd_overlay = NULL;
+        s_pwd_err_lbl = NULL;
         lv_obj_del(ov);
-    }, LV_EVENT_CANCEL, (void*)ctx);
+    }, LV_EVENT_CANCEL, NULL);
 }
 
 #if ENABLE_WIFI_SERVICE
@@ -784,16 +844,19 @@ void app_controller_handle_ui_event(int event_id)
 #if ENABLE_WIFI_SERVICE
         case UI_EVT_WIFI_DIRECT:
             devlog_printf("[CTRL] → WiFi direct from home");
-            scale_service_suspend();
             open_wifi_direct(scr);
             break;
 #endif
+
+        case UI_EVT_RESTART:
+            devlog_printf("[CTRL] → Restart requested by user");
+            ESP.restart();
+            break;
 
         case UI_EVT_HISTORY:
             devlog_printf("[CTRL] → Open history");
             Serial.println("[CTRL] Creating new screen...");
             Serial.flush();
-            scale_service_suspend();
             {
                 lv_obj_t *new_scr = lv_obj_create(NULL);
                 Serial.println("[CTRL] history_screen_create...");
@@ -1000,12 +1063,12 @@ void app_controller_connect_wifi(const char *ssid, const char *password)
 
     if (!password || strlen(password) < 8) {
         devlog_printf("[WIFI] ERROR: Invalid password");
-        home_screen_set_sync_status("Invalid Password");
+        if (g_sync_status_cb) g_sync_status_cb("Invalid Password");
         return;
     }
 
-    if (g_network_busy) {
-        devlog_printf("[WIFI] Busy, skipping connect");
+    if (wifi_ota_task_is_ota_active()) {
+        devlog_printf("[WIFI] OTA active, skipping connect");
         return;
     }
 

@@ -11,8 +11,7 @@
 #include "ui_events.h"
 #include "invoice_session_service.h"
 #include "time_service.h"
-// ✅ REFACTORED: Removed #include "wifi_service.h" - WiFi is now decoupled
-// ✅ Use app_controller instead for WiFi state updates
+#include "ota_service.h"
 
 #ifdef LV_VERSION_MAJOR
 #ifdef __cplusplus
@@ -26,6 +25,7 @@ static lv_obj_t *lbl_device;
 static lv_obj_t *lbl_sync;
 static lv_obj_t *lbl_clock;
 static lv_obj_t *version_label;   // ✅ ADDED
+static lv_obj_t *lbl_sensor_status; // HX711 status bar
 
 static lv_obj_t *item_labels[MAX_INVOICE_ITEMS];
 static lv_obj_t *item_delete_btns[MAX_INVOICE_ITEMS];
@@ -77,6 +77,7 @@ static void home_screen_cleanup(void)
     lbl_sync     = NULL;
     lbl_clock    = NULL;
     version_label = NULL;
+    lbl_sensor_status = NULL;
     for(int i = 0; i < MAX_INVOICE_ITEMS; i++) {
         item_labels[i] = NULL;
         item_delete_btns[i] = NULL;
@@ -167,7 +168,7 @@ static void keypad_btn_cb(lv_event_t *e)
             keypad_started = true;
         } else {
             int nv = keypad_value * 10 + (int)key;
-            if(nv <= 9999) keypad_value = nv;
+            if(nv <= 999) keypad_value = nv;
         }
         if(keypad_value < 1) keypad_value = 1;
     } else if(key == -1) {
@@ -288,6 +289,18 @@ void home_screen_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(lbl_clock, &lv_font_montserrat_20, 0);
     lv_label_set_text(lbl_clock, "--:--");
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 18, 0);
+
+    /* RESTART button — between clock and nav buttons */
+    lv_obj_t *restart_btn = lv_btn_create(header);
+    lv_obj_set_size(restart_btn, 48, 48);
+    lv_obj_align(restart_btn, LV_ALIGN_LEFT_MID, 100, 0);
+    lv_obj_add_style(restart_btn, &g_styles.btn_danger, 0);
+    lv_obj_add_event_cb(restart_btn, btn_event_cb, LV_EVENT_PRESSED, (void*)UI_EVT_RESTART);
+    lv_obj_add_event_cb(restart_btn, btn_event_cb, LV_EVENT_RELEASED, (void*)UI_EVT_RESTART);
+    lv_obj_t *restart_lbl = lv_label_create(restart_btn);
+    lv_obj_set_style_text_font(restart_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_text(restart_lbl, LV_SYMBOL_POWER);
+    lv_obj_center(restart_lbl);
 
     /* Buttons row — full width with even spacing */
     lv_obj_t *hdr_btns = lv_obj_create(header);
@@ -428,18 +441,20 @@ void home_screen_create(lv_obj_t *parent)
     g_qty_h = qty_h;
     g_gap_v = gap_v;
 
+    /* Use flex row: Qty | Multiply | Total — packed tightly left to right */
+    lv_obj_set_flex_flow(qty_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(qty_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(qty_row, 10, 0);
+
     lbl_qty = lv_label_create(qty_row);
     lv_obj_add_style(lbl_qty, &g_styles.value_big, 0);
     lv_label_set_text(lbl_qty, "Qty: 1");
     lv_label_set_long_mode(lbl_qty, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_align(lbl_qty, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(lbl_qty, 170);
-    lv_obj_align(lbl_qty, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_width(lbl_qty, LV_SIZE_CONTENT);
 
     /* Multiply button — toggles keypad visibility */
     lv_obj_t *mult_btn = lv_btn_create(qty_row);
     lv_obj_set_size(mult_btn, 150, 42);
-    lv_obj_align(mult_btn, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_style(mult_btn, &g_styles.btn_warning, 0);
     lv_obj_add_event_cb(mult_btn, multiply_btn_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(mult_btn, multiply_btn_cb, LV_EVENT_RELEASED, NULL);
@@ -451,10 +466,10 @@ void home_screen_create(lv_obj_t *parent)
     lbl_total_weight = lv_label_create(qty_row);
     lv_obj_add_style(lbl_total_weight, &g_styles.value_big, 0);
     lv_label_set_long_mode(lbl_total_weight, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_align(lbl_total_weight, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(lbl_total_weight, 300);
-    lv_obj_align(lbl_total_weight, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_width(lbl_total_weight, LV_SIZE_CONTENT);
     lv_label_set_text(lbl_total_weight, "Total: 0.00 kg");
+    lv_obj_set_flex_grow(lbl_total_weight, 1);
+    lv_obj_set_style_text_align(lbl_total_weight, LV_TEXT_ALIGN_RIGHT, 0);
 
     cur_y += qty_h + gap_v;
 
@@ -574,12 +589,21 @@ void home_screen_create(lv_obj_t *parent)
         lv_obj_add_flag(item_delete_btns[i], LV_OBJ_FLAG_HIDDEN);
     }
 
+    /* Sensor status bar (bottom-left) */
+    lbl_sensor_status = lv_label_create(parent);
+    lv_obj_align(lbl_sensor_status, LV_ALIGN_BOTTOM_LEFT, 10, -5);
+    lv_obj_set_style_text_color(lbl_sensor_status, lv_color_hex(0x22C55E), 0);  // Green = OK
+    lv_obj_set_style_text_font(lbl_sensor_status, &lv_font_montserrat_14, 0);
+    lv_label_set_text(lbl_sensor_status, LV_SYMBOL_OK " Sensor: Initializing...");
+
     /* Version label */
     version_label = lv_label_create(parent);
     lv_obj_align(version_label, LV_ALIGN_BOTTOM_RIGHT, -10, -5);
     lv_obj_set_style_text_color(version_label, ui_theme_muted(), 0);
     lv_obj_set_style_text_font(version_label, &lv_font_montserrat_14, 0);
-    lv_label_set_text(version_label, "v0.0.0");
+    String ota_ver = ota_service_current_version();
+    snprintf(g_format_buf, sizeof(g_format_buf), "v%s", ota_ver.length() ? ota_ver.c_str() : "0.0.0");
+    lv_label_set_text(version_label, g_format_buf);
 
     home_screen_refresh_clock();
     clock_timer = lv_timer_create([](lv_timer_t *t){
@@ -704,6 +728,14 @@ void home_screen_dismiss_save_popup(void)
         lv_obj_del(save_popup);
     }
     save_popup = NULL;
+}
+
+void home_screen_set_sensor_status(const char *status_text, bool is_error)
+{
+    if(!lbl_sensor_status || !lv_obj_is_valid(lbl_sensor_status)) return;
+    lv_label_set_text(lbl_sensor_status, status_text);
+    lv_obj_set_style_text_color(lbl_sensor_status,
+        is_error ? lv_color_hex(0xEF4444) : lv_color_hex(0x22C55E), 0);
 }
 
 static void save_popup_timer_cb(lv_timer_t *t)

@@ -1,10 +1,18 @@
-// Returns true if an item should be added (auto-add logic)
-bool scale_service_should_add_item(float *weight_out);
 #pragma once
 #ifndef SCALE_SERVICE_V2_H_DEFINED
 #define SCALE_SERVICE_V2_H_DEFINED
 
 #include <Arduino.h>
+
+/* HX711 sensor status */
+typedef enum {
+    HX711_READY,           // Normal operation
+    HX711_STABILIZING,     // Filter warming up / recent tare
+    HX711_NO_SENSOR,       // No data from HX711 (wiring issue)
+    HX711_CAL_REQUIRED,    // No valid calibration profile
+    HX711_OVERLOAD,        // Reading exceeds max capacity
+    HX711_STUCK            // Raw value unchanged >5s — sensor stuck
+} hx711_status_t;
 
 typedef struct
 {
@@ -52,5 +60,11 @@ const cal_profile_t* scale_service_get_cal_profile(void);
    Call after adjusting the cal profile offset so the display snaps
    to 0 immediately instead of slowly converging. */
 void scale_service_reset_filter(void);
+
+/* HX711 sensor status query */
+hx711_status_t scale_service_get_status(void);
+
+/* Auto-add item when weight stable */
+bool scale_service_should_add_item(float *weight_out);
 
 #endif

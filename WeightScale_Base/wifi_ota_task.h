@@ -30,6 +30,7 @@ typedef enum {
     WIFI_TASK_CMD_CONNECT,      /* Connect to network (ssid, pwd in payload) */
     WIFI_TASK_CMD_DISCONNECT,   /* Disconnect from network */
     WIFI_TASK_CMD_OTA_CHECK,    /* Check for OTA update */
+    WIFI_TASK_CMD_SYNC,         /* Run one sync_service_loop() cycle on Core 1 */
 } wifi_task_cmd_t;
 
 /**
@@ -73,6 +74,14 @@ String wifi_ota_task_get_ssid(uint8_t index);
 int wifi_ota_task_get_scan_count(void);
 
 /**
+ * @brief Get RSSI for a cached scan result
+ * 
+ * @param index Index of network (0 to count-1)
+ * @return RSSI in dBm, or -127 if index out of range
+ */
+int8_t wifi_ota_task_get_rssi(uint8_t index);
+
+/**
  * @brief Register callback for WiFi state changes
  * 
  * @param cb Callback function, called when state changes
@@ -86,6 +95,11 @@ void wifi_ota_task_register_state_callback(void (*cb)(wifi_state_t));
  */
 bool wifi_ota_task_is_busy(void);
 
+/**
+ * @brief Check if OTA is in progress (blocks scan/reconnect/sync)
+ */
+bool wifi_ota_task_is_ota_active(void);
+
 #else
 
 /* Stub implementations when WiFi is disabled */
@@ -94,7 +108,9 @@ inline bool wifi_ota_task_enqueue(wifi_task_cmd_t cmd, const void *payload, size
 inline wifi_state_t wifi_ota_task_get_state(void) { return WIFI_DISCONNECTED; }
 inline String wifi_ota_task_get_ssid(uint8_t index) { return ""; }
 inline int wifi_ota_task_get_scan_count(void) { return -2; }
+inline int8_t wifi_ota_task_get_rssi(uint8_t index) { return -127; }
 inline void wifi_ota_task_register_state_callback(void (*cb)(wifi_state_t)) {}
 inline bool wifi_ota_task_is_busy(void) { return false; }
+inline bool wifi_ota_task_is_ota_active(void) { return false; }
 
 #endif

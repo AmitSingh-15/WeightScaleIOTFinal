@@ -82,6 +82,7 @@ typedef enum {
 static weight_flow_state_t g_weight_flow_state = WEIGHT_WAIT_FOR_LOAD;
 static float g_stable_weight = 0.0f;
 static unsigned long g_stable_start = 0;
+static float g_last_stable_snap = 0.0f;  /* last snapped value during stability window */
 
 /* Forward declaration */
 static void app_controller_notify_invoice_update(void);
@@ -363,6 +364,7 @@ void app_controller_loop(void)
             g_weight_flow_state = WEIGHT_WAIT_FOR_LOAD;
             g_stable_weight = 0.0f;
             g_stable_start = 0;
+            g_last_stable_snap = 0.0f;
             devlog_printf("[FLOW] Weight removed, ready for next item");
         }
     } else {
@@ -370,20 +372,31 @@ void app_controller_loop(void)
             case WEIGHT_WAIT_FOR_LOAD:
                 g_weight_flow_state = WEIGHT_WAIT_FOR_STABLE;
                 g_stable_weight = w;
+                g_last_stable_snap = w;
                 g_stable_start = millis();
+                devlog_printf("[FLOW] Load detected: %.2f kg, waiting for stable", w);
                 break;
 
             case WEIGHT_WAIT_FOR_STABLE:
                 if (fabsf(w - g_stable_weight) >= WEIGHT_STABILITY_KG) {
+                    /* Weight still changing — reset stability window */
                     g_stable_weight = w;
+                    g_last_stable_snap = w;
+                    g_stable_start = millis();
+                } else if (w != g_last_stable_snap) {
+                    /* Snapped value changed within tolerance — the filter is
+                       still converging. Reset timer to wait for true lock. */
+                    g_last_stable_snap = w;
                     g_stable_start = millis();
                 } else if (g_stable_start != 0 &&
                            (millis() - g_stable_start) > WEIGHT_STABILITY_MS) {
+                    /* Snapped value unchanged for full stability window — add */
                     invoice_session_add_weight_entry(w);
                     invoice_session_set_selected_qty(1);
                     app_controller_notify_invoice_update();
                     g_weight_flow_state = WEIGHT_WAIT_FOR_REMOVE;
-                    devlog_printf("[FLOW] Auto-added stable item: %.2f kg", w);
+                    devlog_printf("[FLOW] Auto-added stable item: %.2f kg (settled in %lums)",
+                                  w, millis() - g_stable_start + WEIGHT_STABILITY_MS);
                 }
                 break;
 
@@ -989,20 +1002,23 @@ void app_controller_handle_ui_event(int event_id)
         }
 
         case UI_EVT_SAVE:
-            devlog_printf("[CTRL] → Save weight item");
+        {
+            float raw_w = g_test_mode ? g_test_weight_val : scale_service_get_weight();
+            devlog_printf("[CTRL] → Save weight item (display=%.2f raw_filter=%.3f)", g_last_weight, raw_w);
             if (g_last_weight >= 0.05f) {
                 invoice_session_add_weight_entry(g_last_weight);
                 invoice_session_set_selected_qty(1);
                 g_weight_flow_state = WEIGHT_WAIT_FOR_REMOVE;
                 g_stable_weight = g_last_weight;
                 g_stable_start = millis();
-                devlog_printf("[CTRL] Added weight %.2f kg, qty %d",
-                              g_last_weight, invoice_session_get_selected_qty());
+                devlog_printf("[CTRL] Added weight %.2f kg (raw_filter=%.3f), qty %d",
+                              g_last_weight, raw_w, invoice_session_get_selected_qty());
             } else {
                 devlog_printf("[CTRL] Weight too low to save (%.2f)", g_last_weight);
             }
             app_controller_notify_invoice_update();
             break;
+        }
 
         case UI_EVT_QTY_CHANGED:
             devlog_printf("[CTRL] → Qty set to %d", invoice_session_get_selected_qty());

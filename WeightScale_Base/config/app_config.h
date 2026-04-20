@@ -57,10 +57,10 @@
 #define SYNC_TRANSPORT_COOLDOWN_MS 60000   // 60s cooldown after transport failure
 
 // Weight stability
-#define WEIGHT_NOISE_FLOOR_KG      0.5f    // Below this = zero
-#define WEIGHT_STABILITY_KG        0.5f    // Jitter tolerance for stable detection
-#define WEIGHT_STABILITY_MS        400     // ms weight must be stable to auto-add
-#define WEIGHT_SNAP_STEP_KG        0.5f    // Snap resolution
+#define WEIGHT_NOISE_FLOOR_KG      0.3f    // Below this = zero (was 0.5)
+#define WEIGHT_STABILITY_KG        0.2f    // Jitter tolerance for stable detection (was 0.5 — too loose)
+#define WEIGHT_STABILITY_MS        800     // ms weight must be stable to auto-add (was 400 — too fast)
+#define WEIGHT_SNAP_STEP_KG        0.1f    // Snap resolution (was 0.5 — caused same weight to show different)
 
 // HX711 health
 #define HX711_NO_DATA_TIMEOUT_MS   3000    // 3s no data = no sensor

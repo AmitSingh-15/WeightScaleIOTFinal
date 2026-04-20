@@ -267,21 +267,29 @@ void wifi_service_connect(const char *ssid, const char *password)
     req_pwd[sizeof(req_pwd) - 1] = 0;
 
     /* Look up channel & BSSID from recent scan results so WiFi.begin()
-       can skip the internal re-scan (critical for SDIO WiFi reliability) */
+       can skip the internal re-scan (critical for SDIO WiFi reliability).
+       Pick the strongest AP when multiple routers share the same SSID. */
     req_channel = 0;
     req_has_bssid = false;
     memset(req_bssid, 0, sizeof(req_bssid));
     int n = WiFi.scanComplete();
+    int8_t best_manual_rssi = -128;
     for(int i = 0; i < n; i++) {
         if(strcmp(ssid, WiFi.SSID(i).c_str()) == 0) {
-            req_channel = WiFi.channel(i);
-            memcpy(req_bssid, WiFi.BSSID(i), 6);
-            req_has_bssid = true;
-            devlog_printf("[WIFI] AP hint: ch=%d BSSID=%02X:%02X:%02X:%02X:%02X:%02X",
-                          req_channel, req_bssid[0], req_bssid[1], req_bssid[2],
-                          req_bssid[3], req_bssid[4], req_bssid[5]);
-            break;
+            int8_t rssi = (int8_t)WiFi.RSSI(i);
+            if(rssi > best_manual_rssi) {
+                best_manual_rssi = rssi;
+                req_channel = WiFi.channel(i);
+                memcpy(req_bssid, WiFi.BSSID(i), 6);
+                req_has_bssid = true;
+            }
         }
+    }
+    if(req_has_bssid) {
+        devlog_printf("[WIFI] AP hint: ch=%d RSSI=%d BSSID=%02X:%02X:%02X:%02X:%02X:%02X",
+                      req_channel, best_manual_rssi,
+                      req_bssid[0], req_bssid[1], req_bssid[2],
+                      req_bssid[3], req_bssid[4], req_bssid[5]);
     }
 
     /* Cancel any pending auto-connect — user explicitly chose a network */
@@ -342,7 +350,9 @@ static bool auto_connect_load_next(void)
             if(!storage_get_wifi_at(si, ssid, sizeof(ssid), pwd, sizeof(pwd)) || !ssid[0])
                 continue;
 
-            /* Find this SSID in scan results and get its RSSI */
+            /* Find this SSID in scan results — check ALL APs with same name
+               (enterprise/office WiFi may have multiple routers sharing one SSID)
+               and pick the one with the strongest signal */
             for(int ai = 0; ai < scan_count; ai++) {
                 String scanned = WiFi.SSID(ai);
                 if(scanned.length() == 0) continue;
@@ -352,7 +362,7 @@ static bool auto_connect_load_next(void)
                         best_rssi = rssi;
                         best_saved_idx = si;
                     }
-                    break;  /* found this SSID in scan, move to next saved */
+                    /* don't break — keep scanning for a stronger AP with same SSID */
                 }
             }
         }
@@ -364,20 +374,31 @@ static bool auto_connect_load_next(void)
             req_ssid[sizeof(req_ssid) - 1] = 0;
             strncpy(req_pwd, pwd, sizeof(req_pwd) - 1);
             req_pwd[sizeof(req_pwd) - 1] = 0;
-            /* Grab channel/BSSID for the best match */
+            /* Grab channel/BSSID for the strongest AP with this SSID */
             req_channel = 0;
             req_has_bssid = false;
             memset(req_bssid, 0, sizeof(req_bssid));
+            int8_t best_ap_rssi = -128;
             for(int ai = 0; ai < scan_count; ai++) {
                 if(strcmp(ssid, WiFi.SSID(ai).c_str()) == 0) {
-                    req_channel = WiFi.channel(ai);
-                    memcpy(req_bssid, WiFi.BSSID(ai), 6);
-                    req_has_bssid = true;
-                    break;
+                    int8_t rssi = (int8_t)WiFi.RSSI(ai);
+                    if(rssi > best_ap_rssi) {
+                        best_ap_rssi = rssi;
+                        req_channel = WiFi.channel(ai);
+                        memcpy(req_bssid, WiFi.BSSID(ai), 6);
+                        req_has_bssid = true;
+                    }
                 }
             }
             auto_connect_net_index = best_saved_idx;
-            devlog_printf("[WIFI] Auto-connect: strongest saved='%s' RSSI=%d", ssid, best_rssi);
+            if(req_has_bssid) {
+                devlog_printf("[WIFI] Auto-connect: strongest saved='%s' RSSI=%d ch=%d BSSID=%02X:%02X:%02X:%02X:%02X:%02X",
+                              ssid, best_rssi, req_channel,
+                              req_bssid[0], req_bssid[1], req_bssid[2],
+                              req_bssid[3], req_bssid[4], req_bssid[5]);
+            } else {
+                devlog_printf("[WIFI] Auto-connect: strongest saved='%s' RSSI=%d", ssid, best_rssi);
+            }
             return true;
         }
         /* No saved network visible in scan — don't try blind */

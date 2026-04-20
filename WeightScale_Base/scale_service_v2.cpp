@@ -42,7 +42,7 @@ static const unsigned long AUTO_ZERO_COOLDOWN_MS = 10000; /* 10s between zeros *
 static const unsigned long RAW_STABLE_MS = 250; /* was 500 — settle faster */
 static const float FAST_TRACK_STEP_KG = 3.0f; /* was 5.0 — snap sooner */
 static const float MEDIUM_TRACK_STEP_KG = 0.5f; /* was 1.0 — use fast EMA for smaller changes */
-static const float RETURN_ZERO_THRESHOLD_KG = 0.50f; /* was 0.20 — heavy machine, under 500g = zero */
+static const float RETURN_ZERO_THRESHOLD_KG = 0.30f; /* match WEIGHT_NOISE_FLOOR_KG */
 static const unsigned long RETURN_ZERO_MS = 500; /* was 2000 — snap to zero fast */
 static unsigned long auto_zero_stable_since = 0;
 static unsigned long auto_zero_last_tare = 0;
@@ -81,13 +81,14 @@ static void scale_task(void *p)
     /* Register with task watchdog (30s timeout) */
     esp_task_wdt_add(NULL);
 
-    const int SAMPLE_COUNT = 4;
+    const int SAMPLE_COUNT = 8;
     float samples[SAMPLE_COUNT];
     long raw_samples[SAMPLE_COUNT];
     int index = 0;
     bool buffer_full = false;
 
     float last_valid = 0;
+    bool was_zero = true;  /* track zero→loaded transition for fast-track */
 
     int consecutive_fails = 0;
     uint8_t wdt_counter = 0;
@@ -108,6 +109,7 @@ static void scale_task(void *p)
             g_stable_raw_candidate = 0;
             g_stable_raw_since = 0;
             return_zero_since = 0;
+            was_zero = true;
             index = 0;
             buffer_full = false;
             memset(samples, 0, sizeof(samples));
@@ -117,6 +119,20 @@ static void scale_task(void *p)
 
         if (scale.is_ready())
         {
+            /* Read tare-adjusted raw counts with timeout guard.
+               HX711 read can block if sensor disconnects mid-read. */
+            unsigned long read_start = millis();
+            long raw = scale.get_value(1);
+            unsigned long read_elapsed = millis() - read_start;
+
+            /* If read took >500ms, HX711 likely hung briefly — log and skip */
+            if(read_elapsed > 500) {
+                devlog_printf("[SCALE] SLOW read: %lums — possible HX711 issue", read_elapsed);
+                esp_task_wdt_reset();  /* don't let WDT fire for a slow read */
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+
             g_last_hx711_read_ms = millis();
 
             /* Update status based on calibration and warmup */
@@ -127,10 +143,6 @@ static void scale_task(void *p)
             } else {
                 g_hx711_status = HX711_READY;
             }
-
-            /* Read tare-adjusted raw counts once here. This task is the only
-               code path allowed to talk to HX711 directly. */
-            long raw = scale.get_value(1);  /* was 3 — trimmed avg handles noise, no need to block here */
 
             /* === HX711 STUCK detection (Req 6) === */
             if (raw != g_stuck_last_raw) {
@@ -192,13 +204,13 @@ static void scale_task(void *p)
             /* ===== ONLY PROCESS WHEN BUFFER READY ===== */
             if(buffer_full)
             {
-                /* ---------- MEDIAN-OF-3 TRIMMED AVERAGE ----------
-                   Sort, discard lowest and highest 2 readings,
-                   average the middle values to reject outliers.    */
+                /* ---------- TRIMMED AVERAGE ----------
+                   Sort 8 samples, discard lowest 2 and highest 2,
+                   average the middle 4 to reject outliers.        */
                 float sorted[SAMPLE_COUNT];
                 memcpy(sorted, samples, sizeof(samples));
 
-                /* Simple insertion sort (16 elements) */
+                /* Simple insertion sort (8 elements) */
                 for(int i = 1; i < SAMPLE_COUNT; i++) {
                     float key = sorted[i];
                     int j = i - 1;
@@ -209,9 +221,9 @@ static void scale_task(void *p)
                     sorted[j+1] = key;
                 }
 
-                /* Trim 1 from each end (was 2, adjusted for smaller buffer) */
+                /* Trim 2 from each end — average middle 4 */
                 float sum = 0;
-                const int trim = 1;
+                const int trim = 2;
                 for(int i = trim; i < SAMPLE_COUNT - trim; i++)
                     sum += sorted[i];
                 float avg = sum / (SAMPLE_COUNT - 2 * trim);
@@ -233,6 +245,11 @@ static void scale_task(void *p)
                 for(int i = trim; i < SAMPLE_COUNT - trim; i++)
                     raw_sum += raw_sorted[i];
                 long avg_raw = raw_sum / (SAMPLE_COUNT - 2 * trim);
+
+                /* Track zero→loaded transition */
+                bool is_loaded = (avg > 0.10f);
+                bool just_loaded = (is_loaded && was_zero);
+                was_zero = !is_loaded;
 
                 long raw_threshold = (long)(activeProfile.hold_threshold * activeProfile.scale);
                 if(raw_threshold < 50) raw_threshold = 50;
@@ -258,10 +275,15 @@ static void scale_task(void *p)
 
                 /* ---------- ADAPTIVE SMOOTH ---------- */
                 float filter_diff = fabsf(last_valid - filtered_weight);
-                if(filter_diff >= FAST_TRACK_STEP_KG) {
+                if(just_loaded || filter_diff >= FAST_TRACK_STEP_KG) {
+                    /* Zero→loaded or large jump: snap immediately to avoid
+                       slow EMA convergence that causes inconsistent readings */
                     filtered_weight = last_valid;
+                    if(just_loaded) {
+                        devlog_printf("[SCALE] Fast-track: zero→loaded, snap to %.3f kg", last_valid);
+                    }
                 } else if(filter_diff >= MEDIUM_TRACK_STEP_KG) {
-                    filtered_weight = ema(filtered_weight, last_valid, 0.85f); /* was 0.70 */
+                    filtered_weight = ema(filtered_weight, last_valid, 0.85f);
                 } else {
                     filtered_weight = ema(
                         filtered_weight,
@@ -294,6 +316,7 @@ static void scale_task(void *p)
                         filtered_weight = 0.0f;
                         last_valid = 0.0f;
                         last_valid_raw = 0;
+                        was_zero = true;
                     }
                 } else {
                     return_zero_since = 0;
@@ -322,6 +345,7 @@ static void scale_task(void *p)
                             g_stable_raw_candidate = 0;
                             g_stable_raw_since = 0;
                             return_zero_since = 0;
+                            was_zero = true;
                             auto_zero_last_tare = now;
                             auto_zero_was_loaded = false;
                             auto_zero_stable_since = 0;
@@ -469,14 +493,14 @@ bool scale_service_should_add_item(float *stable_weight)
 
     float w = scale_service_get_weight();
 
-    if(fabs(w - last_weight) < 0.50f)   // stability threshold — heavy machine, 500g tolerance
+    if(fabs(w - last_weight) < WEIGHT_STABILITY_KG)
     {
         if(stable_start == 0)
             stable_start = millis();
 
-        if(!captured && (millis() - stable_start > 400))  /* was 600ms */
+        if(!captured && (millis() - stable_start > WEIGHT_STABILITY_MS))
         {
-            if(w > 0.50f)  /* heavy machine — meaningful weight starts at 500g */
+            if(w > WEIGHT_NOISE_FLOOR_KG)
             {
                 *stable_weight = w;
                 captured = true;

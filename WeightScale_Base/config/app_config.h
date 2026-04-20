@@ -72,8 +72,8 @@
 #define HEAP_LOW_THRESHOLD_BYTES   20480   // 20KB low-memory warning
 
 // Crash loop
-#define CRASH_LOOP_MAX_BOOTS       3       // >3 crashes = safe mode
-#define CRASH_COUNTER_CLEAR_MS     30000   // Clear crash counter after 30s stable
+#define CRASH_LOOP_MAX_BOOTS       10      // >10 crashes = safe mode (was 3, too aggressive)
+#define CRASH_COUNTER_CLEAR_MS     20000   // Clear crash counter after 20s stable
 
 // WiFi stability
 #define WIFI_STABLE_AFTER_MS       15000   // 15s connected = STABLE

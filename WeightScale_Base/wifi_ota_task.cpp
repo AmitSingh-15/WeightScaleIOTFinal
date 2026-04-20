@@ -141,14 +141,15 @@ static void wifi_ota_worker_task(void *param)
 {
     devlog_printf("[WIFI_TASK] Worker started on core %d", xPortGetCoreID());
 
-    /* Register with task watchdog (30s timeout) */
-    esp_task_wdt_add(NULL);
+    /* Do NOT register with task WDT — SDIO calls to the C6 can block
+       indefinitely when the bus is unstable, and WDT abort just causes
+       crash loops.  The rest of the system (display, scale) stays alive
+       even if this task hangs; SDIO recovery logic handles it. */
 
     wifi_task_message_t msg;
     unsigned long idle_poll_ms = 20;
 
     while (true) {
-        esp_task_wdt_reset();
 
         if (xQueueReceive(wifi_ota_cmd_queue, &msg, pdMS_TO_TICKS(idle_poll_ms))) {
 
@@ -240,13 +241,7 @@ static void wifi_ota_worker_task(void *param)
                     /* Enter safe mode BEFORE OTA */
                     ota_enter_safe_mode();
 
-                    /* Disable watchdog — OTA can take minutes */
-                    esp_task_wdt_delete(NULL);
-
                     ota_service_check_and_update();
-
-                    /* Re-enable watchdog */
-                    esp_task_wdt_add(NULL);
 
                     /* Exit safe mode AFTER OTA (success or fail, ESP.restart() won't reach here on success) */
                     ota_exit_safe_mode();

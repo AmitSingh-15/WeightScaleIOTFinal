@@ -4,7 +4,6 @@
 
 #include "wifi_service.h"
 #include <WiFi.h>
-#include <esp_task_wdt.h>
 #include "devlog.h"
 #include "storage_service.h"
 #include "sync_service.h"
@@ -115,18 +114,13 @@ static void wifi_sdio_recovery(void)
        tears down the hosted SDIO interface and permanently corrupts
        the bus after a failed connect. Instead, mirror the proven
        init sequence: disconnect + scanDelete + generous delay. */
-    esp_task_wdt_reset();
     WiFi.disconnect(false, false);   /* soft disconnect — keep SDIO link alive! */
     WiFi.scanDelete();
-    esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(3000));  /* match init settle time */
-    esp_task_wdt_reset();
     /* Double-tap: clear any residual C6 state */
     WiFi.disconnect(false, false);
     WiFi.scanDelete();
-    esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(2000));
-    esp_task_wdt_reset();
     consecutive_connect_failures = 0;
     scan_count = 0;
     scan_in_progress = false;
@@ -140,7 +134,6 @@ static void wifi_sdio_recovery(void)
 void wifi_service_init(void)
 {
     WiFi.persistent(false);
-    esp_task_wdt_reset();  /* Feed WDT before blocking SDIO call */
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(false);
     WiFi.setSleep(false);
@@ -155,10 +148,9 @@ void wifi_service_init(void)
     /* CRITICAL: ESP32-P4 uses an external ESP32-C6 for WiFi via SDIO
        (ESP-Hosted). The SDIO bus negotiation often drops packets during
        startup. Without this delay, scan/connect operations fail with
-       WIFI_SCAN_FAILED (-2) because the hosted link isn't stable yet. */
-    esp_task_wdt_reset();  /* Feed WDT before long delay */
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    esp_task_wdt_reset();
+       WIFI_SCAN_FAILED (-2) because the hosted link isn't stable yet.
+       5s settle gives the C6 enough time to stabilize after power-on. */
+    vTaskDelay(pdMS_TO_TICKS(5000));
     devlog_printf("[WIFI] STA mode initialized (SDIO settle done)");
 
     state = WIFI_DISCONNECTED;
@@ -174,12 +166,13 @@ void wifi_service_init(void)
     /* Schedule auto-connect if any saved networks exist */
     uint8_t cnt = storage_get_wifi_count();
     if(cnt > 0) {
-        /* Start a background scan immediately so RSSI data is ready for auto-connect */
+        /* Start a background scan after SDIO bus stabilizes.
+           Delay 5s so the C6 is fully ready before first SDIO scan traffic. */
         scan_requested = true;
         scan_in_progress = false;
         scan_count = -1;
         scan_retry_count = 0;
-        scan_retry_ms = 0;
+        scan_retry_ms = millis() + 5000;  /* Delay first scan by 5s */
         scan_start_ms = 0;
 
         auto_connect_pending = true;
@@ -201,18 +194,17 @@ void wifi_service_start_scan(void)
         return;
     }
 
-    auto_connect_pending = false;
+    /* Don't cancel auto_connect_pending here — a scan from the WiFi screen
+       shouldn't kill background auto-connect.  Only explicit user connect
+       (wifi_service_connect) or exhausted retries cancel auto-connect. */
     connect_request = false;
 
     if(state == WIFI_CONNECTING) {
         /* Soft disconnect + scanDelete to reset C6 state.
            NEVER mode-cycle on ESP-Hosted — it kills the SDIO bus. */
-        esp_task_wdt_reset();
         WiFi.disconnect(false, false);
         WiFi.scanDelete();
-        esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(1000));
-        esp_task_wdt_reset();
         wifi_critical_section = false;
         set_state(WIFI_DISCONNECTED);
     }
@@ -504,21 +496,14 @@ void wifi_service_loop(void)
                    NEVER mode-cycle — it kills the SDIO bus permanently
                    on ESP-Hosted after a failed connect. */
                 devlog_printf("[WIFI] WiFi reset + sync scan probe");
-                esp_task_wdt_reset();
                 WiFi.disconnect(false, false);
                 WiFi.scanDelete();
-                esp_task_wdt_reset();
                 vTaskDelay(pdMS_TO_TICKS(3000));
-                esp_task_wdt_reset();
 
                 /* Synchronous scan forces complete SDIO round-trip.
-                   More reliable than async after a stack reset.
-                   Remove WDT since sync scan blocks for 5-10s. */
+                   More reliable than async after a stack reset. */
                 devlog_printf("[WIFI] Trying synchronous scan...");
-                esp_task_wdt_delete(NULL);
                 int sync_result = WiFi.scanNetworks(false);
-                esp_task_wdt_add(NULL);
-                esp_task_wdt_reset();
 
                 if(sync_result > 0) {
                     scan_count = sync_result;
@@ -692,10 +677,8 @@ void wifi_service_loop(void)
             connect_mid_retries++;
             devlog_printf("[WIFI] No progress (status=%d), re-trying begin %d/%d",
                           (int)s, connect_mid_retries, CONNECT_MID_RETRY_MAX);
-            esp_task_wdt_reset();
             WiFi.disconnect(false, false);
             vTaskDelay(pdMS_TO_TICKS(500));
-            esp_task_wdt_reset();
             WiFi.scanDelete();
             vTaskDelay(pdMS_TO_TICKS(100));
             last_begin_ms = millis();
@@ -720,12 +703,9 @@ void wifi_service_loop(void)
                it tears down the SDIO hosted interface and permanently
                kills the bus after a failed connect. This mirrors the
                proven init sequence that works at every boot. */
-            esp_task_wdt_reset();
             WiFi.disconnect(false, false);
             WiFi.scanDelete();
-            esp_task_wdt_reset();
             vTaskDelay(pdMS_TO_TICKS(3000));  /* match init settle time */
-            esp_task_wdt_reset();
 
             connected_since_ms = 0;
             link_poll_failures = 0;

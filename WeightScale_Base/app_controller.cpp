@@ -6,6 +6,7 @@
 #include <math.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <esp_system.h>
 #include <Preferences.h>
 
 /* ========================================================
@@ -124,17 +125,40 @@ void app_controller_init(void)
     {
         Preferences boot_prefs;
         boot_prefs.begin("boot", false);
-        uint8_t crash_count = boot_prefs.getUChar("crashes", 0);
-        crash_count++;
-        boot_prefs.putUChar("crashes", crash_count);
-        boot_prefs.end();
-        devlog_printf("[CTRL] Boot crash counter: %d", crash_count);
-        if (crash_count > CRASH_LOOP_MAX_BOOTS) {
-            g_wifi_safe = false;
-            system_state_transition(SYS_RECOVERY);
-            devlog_printf("[CTRL] Crash loop detected (%d crashes). WiFi DISABLED.", crash_count);
-            devlog_printf("[CTRL] Power-cycle the device to re-enable WiFi.");
+
+        esp_reset_reason_t reason = esp_reset_reason();
+
+        /* Check for user-initiated restart flag (set before ESP.restart).
+           On ESP32-P4, ESP.restart() produces rst:0xc (SW_CPU_RESET) which
+           esp_reset_reason() does NOT classify as ESP_RST_SW, so we use
+           a persistent flag instead. */
+        bool clean_restart = boot_prefs.getBool("clean", false);
+        if (clean_restart) {
+            boot_prefs.putBool("clean", false);  /* consume the flag */
         }
+
+        /* Only count abnormal resets (WDT, panic, brownout, etc.)
+           Intentional restarts (ESP.restart) and power-on don't count. */
+        if (reason == ESP_RST_POWERON || clean_restart) {
+            /* Fresh power-on or user-initiated restart — reset counter */
+            boot_prefs.putUChar("crashes", 0);
+            devlog_printf("[CTRL] Boot reason: %s — crash counter reset",
+                          reason == ESP_RST_POWERON ? "POWERON" : "CLEAN_RESTART");
+        } else {
+            /* Abnormal reset (PANIC, TASK_WDT, INT_WDT, BROWNOUT, etc.) */
+            uint8_t crash_count = boot_prefs.getUChar("crashes", 0);
+            crash_count++;
+            boot_prefs.putUChar("crashes", crash_count);
+            devlog_printf("[CTRL] Boot crash counter: %d (reason: %d, threshold: %d)",
+                          crash_count, (int)reason, CRASH_LOOP_MAX_BOOTS);
+            if (crash_count > CRASH_LOOP_MAX_BOOTS) {
+                g_wifi_safe = false;
+                system_state_transition(SYS_RECOVERY);
+                devlog_printf("[CTRL] Crash loop detected (%d crashes). WiFi DISABLED.", crash_count);
+                devlog_printf("[CTRL] Power-cycle the device to re-enable WiFi.");
+            }
+        }
+        boot_prefs.end();
     }
 
     // Always init these services
@@ -916,6 +940,17 @@ void app_controller_handle_ui_event(int event_id)
 #endif
             Serial.flush();
             delay(300);   /* let services settle */
+
+            /* Mark this as a clean (user-initiated) restart so the
+               crash counter doesn't increment on the next boot.
+               On ESP32-P4, ESP.restart() produces rst:0xc (SW_CPU_RESET)
+               which esp_reset_reason() does NOT classify as ESP_RST_SW. */
+            {
+                Preferences rp;
+                rp.begin("boot", false);
+                rp.putBool("clean", true);
+                rp.end();
+            }
 
             ESP.restart();
             break;

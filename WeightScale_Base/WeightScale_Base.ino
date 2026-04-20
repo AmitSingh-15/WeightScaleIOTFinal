@@ -173,6 +173,15 @@ void setup() {
     }
     MAIN_INFO("  ✓ Board hardware initialized");
 
+    // Configure LCD for double-buffered anti-tear (MUST be after init, before begin)
+    {
+        auto lcd_cfg = g_board->getLCD();
+        if (lcd_cfg) {
+            lcd_cfg->configFrameBufferNumber(2);
+            MAIN_INFO("  ✓ LCD configured for 2 frame buffers (anti-tear)");
+        }
+    }
+
     // Start the board (enable LCD output, touch input, backlight)
     if (!g_board->begin()) {
         MAIN_ERROR("Board::begin() failed");

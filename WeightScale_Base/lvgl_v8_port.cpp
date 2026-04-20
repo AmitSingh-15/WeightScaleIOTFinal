@@ -810,11 +810,16 @@ bool lvgl_port_init(LCD *lcd, Touch *tp)
     // Record the initial rotation of the display
     lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
 
-    // For non-RGB LCD, need to notify LVGL that the buffer is ready when the refresh is finished
+#if !LVGL_PORT_AVOID_TEAR
+    // For non-RGB LCD WITHOUT anti-tearing, notify LVGL when drawBitmap finishes.
+    // When anti-tearing IS enabled, flush_callback handles lv_disp_flush_ready()
+    // after the vsync wait — attaching this callback would cause a double-flush
+    // and corrupt user_data (shared between both callbacks in ESP_Panel library).
     if (bus_type != ESP_PANEL_BUS_TYPE_RGB) {
         ESP_UTILS_LOGD("Attach refresh finish callback to LCD");
         lcd->attachDrawBitmapFinishCallback(onDrawBitmapFinishCallback, (void *)disp->driver);
     }
+#endif
 
     if (tp != nullptr) {
         ESP_UTILS_LOGD("Initialize LVGL input driver");

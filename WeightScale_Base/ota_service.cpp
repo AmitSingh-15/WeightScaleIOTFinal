@@ -37,7 +37,7 @@ bool ota_service_is_busy(void)
 }
 
 // ================= VERSION =================
-#define OTA_VERSION "2.1.2"
+#define OTA_VERSION "2.1.3"
 #define OTA_VERSION_URL "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/main/firmware/version.txt"
 #define OTA_BIN_URL "https://raw.githubusercontent.com/AmitSingh-15/WeightScaleIOTFinal/main/firmware/Weights.bin"
 

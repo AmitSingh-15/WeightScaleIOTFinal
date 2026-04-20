@@ -1,3 +1,11 @@
+/* ===================================================================
+ * DISABLED: This file is superseded by lvgl_v8_port.cpp (vendor port).
+ * The vendor port handles display init, double-buffered anti-tear,
+ * and LVGL task management. This file was allocating duplicate LVGL
+ * driver structures that wasted memory.
+ * =================================================================== */
+#if 0  // Dead code — vendor LVGL port is used instead
+
 #include "lvgl_port.h"
 #include "display/gfx_conf.h"
 #include "config/app_config.h"
@@ -130,3 +138,5 @@ void lvgl_port_loop(void)
 
     lv_timer_handler();
 }
+
+#endif  // Dead code guard

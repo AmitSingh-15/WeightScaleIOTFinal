@@ -795,13 +795,13 @@ void home_screen_set_weight(float w)
     if(!lvgl_port_lock(100)) return;
     if(!lbl_weight || !lv_obj_is_valid(lbl_weight)) { lvgl_port_unlock(); return; }
 
-    /* Dismiss save popup when new weight is detected from HX711 */
+    snprintf(g_format_buf, sizeof(g_format_buf), "%.1f", w);
+    lv_label_set_text(lbl_weight, g_format_buf);
+
+    /* Dismiss save popup AFTER weight label update to avoid flash from large overlay deletion */
     if(w > 0.1f && save_popup) {
         home_screen_dismiss_save_popup();
     }
-
-    snprintf(g_format_buf, sizeof(g_format_buf), "%.1f", w);
-    lv_label_set_text(lbl_weight, g_format_buf);
     lvgl_port_unlock();
 }
 

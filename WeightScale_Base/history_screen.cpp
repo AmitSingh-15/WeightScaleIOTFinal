@@ -182,11 +182,10 @@ void history_screen_refresh(void)
         inv_totals[i] = sum;
     }
 
-    /* Show newest first — yield to LVGL between rows to prevent UI freeze */
+    /* Show newest first */
     for(uint32_t i = 0; i < loaded; i++)
     {
         add_record_row(i, &recs[i], inv_totals[i]);
-        if((i + 1) % 5 == 0) lv_task_handler();
     }
     Serial.printf("[HIST] refresh done, showed %lu rows\n", loaded);
 }

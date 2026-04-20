@@ -311,10 +311,13 @@ void app_controller_loop(void)
     /* ===== HX711 SENSOR STATUS UPDATE (every 2s) ===== */
     {
         static unsigned long last_status_update = 0;
+        static hx711_status_t last_sensor_st = (hx711_status_t)-1;
         if (millis() - last_status_update > 2000) {
             last_status_update = millis();
             hx711_status_t st = scale_service_get_status();
-            switch (st) {
+            if (st != last_sensor_st) {
+                last_sensor_st = st;
+                switch (st) {
                 case HX711_READY:
                     home_screen_set_sensor_status(LV_SYMBOL_OK " Sensor: Ready", false);
                     break;
@@ -333,6 +336,7 @@ void app_controller_loop(void)
                 case HX711_STUCK:
                     home_screen_set_sensor_status(LV_SYMBOL_WARNING " Sensor: STUCK!", true);
                     break;
+                }
             }
         }
     }
@@ -489,9 +493,8 @@ static void app_controller_restore_home_screen(void)
     home_screen_register_callback([](int evt) {
         app_controller_handle_ui_event(evt);
     });
-    lv_scr_load(home_scr);
 
-    /* Restore current state on the new home screen */
+    /* Populate all data BEFORE making the screen active to avoid blank-frame flicker */
     home_screen_set_weight(g_last_weight);
     home_screen_set_quantity(invoice_session_get_selected_qty());
     home_screen_set_invoice(invoice_service_current_id());
@@ -505,6 +508,9 @@ static void app_controller_restore_home_screen(void)
         if(storage_load_device_name(dev_name, sizeof(dev_name)))
             home_screen_set_device(dev_name);
     }
+
+    /* Fade-in the fully populated screen; auto_del cleans up the previous screen */
+    lv_scr_load_anim(home_scr, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, true);
     devlog_printf("[CTRL] Returned to home");
 }
 
@@ -687,8 +693,7 @@ static void open_calibration_wizard(lv_obj_t *from_scr)
         }
     });
 
-    lv_scr_load(wiz_scr);
-    lv_obj_del_async(from_scr);
+    lv_scr_load_anim(wiz_scr, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, true);
     devlog_printf("[CTRL] Calibration wizard opened");
 }
 
@@ -788,8 +793,7 @@ static void settings_password_popup_show(void)
                     lv_obj_t *cur = lv_scr_act();
                     open_calibration_wizard(cur);
                 });
-                lv_scr_load(new_scr);
-                lv_obj_del_async(scr);
+                lv_scr_load_anim(new_scr, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, true);
                 devlog_printf("[CTRL] Settings unlocked");
             } else {
                 /* Wrong password */
@@ -818,6 +822,26 @@ static void settings_password_popup_show(void)
 /* Open WiFi list screen directly from home */
 static void open_wifi_direct(lv_obj_t *home_scr)
 {
+    /* Guard: WiFi was skipped during crash-loop recovery — SDIO bus not initialized */
+    if (!g_wifi_safe) {
+        devlog_printf("[CTRL] WiFi blocked — recovery mode (SDIO not initialized)");
+        /* Brief toast-style message on the current screen */
+        lv_obj_t *msg = lv_label_create(lv_scr_act());
+        lv_label_set_text(msg, "WiFi disabled (recovery mode)\nRestart to re-enable");
+        lv_obj_set_style_text_color(msg, lv_color_hex(0xFF6B6B), 0);
+        lv_obj_set_style_text_font(msg, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 80);
+        /* Auto-delete after 3 seconds */
+        lv_timer_t *t = lv_timer_create([](lv_timer_t *timer) {
+            lv_obj_t *lbl = (lv_obj_t *)timer->user_data;
+            if (lbl) lv_obj_del(lbl);
+            lv_timer_del(timer);
+        }, 3000, msg);
+        lv_timer_set_repeat_count(t, 1);
+        return;
+    }
+
     /* Create a standalone WiFi list screen with back → home */
     lv_obj_t *wifi_scr = lv_obj_create(NULL);
     wifi_list_screen_create(wifi_scr);
@@ -828,8 +852,7 @@ static void open_wifi_direct(lv_obj_t *home_scr)
         extern void wifi_password_popup_show(const char *ssid);
         wifi_password_popup_show(ssid);
     });
-    lv_scr_load(wifi_scr);
-    lv_obj_del_async(home_scr);
+    lv_scr_load_anim(wifi_scr, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, true);
 
     /* Start scanning immediately */
     wifi_list_screen_start_scan();
@@ -916,8 +939,7 @@ void app_controller_handle_ui_event(int event_id)
                 history_screen_register_back([]() {
                     app_controller_restore_home_screen();
                 });
-                lv_scr_load(new_scr);
-                lv_obj_del_async(scr);
+                lv_scr_load_anim(new_scr, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, true);
             }
             Serial.println("[CTRL] History screen loaded");
             break;

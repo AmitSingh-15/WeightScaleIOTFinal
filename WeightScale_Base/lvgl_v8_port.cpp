@@ -15,7 +15,7 @@
 using namespace esp_panel::drivers;
 
 #define LVGL_PORT_ENABLE_ROTATION_OPTIMIZED     (1)
-#define LVGL_PORT_BUFFER_NUM_MAX                (2)
+#define LVGL_PORT_BUFFER_NUM_MAX                (3)
 
 static SemaphoreHandle_t lvgl_mux = nullptr;                  // LVGL mutex
 static TaskHandle_t lvgl_task_handle = nullptr;

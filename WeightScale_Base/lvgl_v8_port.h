@@ -8,11 +8,11 @@
 #include "sdkconfig.h"
 
 /* ✅ Enable anti-tearing mode 1: LCD double-buffer + LVGL full-refresh.
- * The LCD must be configured with 2 frame buffers via configFrameBufferNumber(2)
+ * The LCD must be configured with 3 frame buffers via configFrameBufferNumber(3)
  * BEFORE board->begin(). See WeightScale_Base.ino Step 2.
  */
 #undef CONFIG_LVGL_PORT_AVOID_TEARING_MODE
-#define CONFIG_LVGL_PORT_AVOID_TEARING_MODE 1
+#define CONFIG_LVGL_PORT_AVOID_TEARING_MODE 2
 
 #ifdef CONFIG_ARDUINO_RUNNING_CORE
 #include <Arduino.h>
@@ -54,7 +54,7 @@
  */
 #define LVGL_PORT_TASK_MAX_DELAY_MS             (500)       // The maximum delay of the LVGL timer task, in milliseconds
 #define LVGL_PORT_TASK_MIN_DELAY_MS             (2)         // The minimum delay of the LVGL timer task, in milliseconds
-#define LVGL_PORT_TASK_STACK_SIZE               (6 * 1024)  // 6KB needed for full-refresh rendering
+#define LVGL_PORT_TASK_STACK_SIZE               (8 * 1024)  // Headroom for 1024x600 full-refresh rendering
 #define LVGL_PORT_TASK_PRIORITY                 (2)         // The priority of the LVGL timer task
 #ifdef ARDUINO_RUNNING_CORE
 #define LVGL_PORT_TASK_CORE                     (ARDUINO_RUNNING_CORE)  // Valid if using Arduino

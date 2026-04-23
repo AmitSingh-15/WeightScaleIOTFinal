@@ -37,6 +37,16 @@
 #define WIFI_OTA_TASK_PRIORITY     3       // Above scale(1), below LVGL
 #define WIFI_OTA_TASK_CORE         1
 
+// ESP32-P4 <-> ESP32-C6 ESP-Hosted SDIO wiring for CrowPanel Advanced 7/9/10.1".
+// These match the manufacturer's crowpanel-p4-70-90-101 target.
+#define CROWPANEL_C6_SDIO_CLK_PIN   18
+#define CROWPANEL_C6_SDIO_CMD_PIN   19
+#define CROWPANEL_C6_SDIO_D0_PIN    14
+#define CROWPANEL_C6_SDIO_D1_PIN    15
+#define CROWPANEL_C6_SDIO_D2_PIN    16
+#define CROWPANEL_C6_SDIO_D3_PIN    17
+#define CROWPANEL_C6_RESET_PIN      32
+
 // OTA timing
 #define OTA_CMD_COOLDOWN_MS        30000   // 30s between OTA check commands
 #define OTA_WIFI_SETTLE_MS         10000   // WiFi must be connected this long before OTA

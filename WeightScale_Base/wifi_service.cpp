@@ -133,6 +133,21 @@ static void wifi_sdio_recovery(void)
 ========================================================= */
 void wifi_service_init(void)
 {
+#if CONFIG_ESP_WIFI_REMOTE_ENABLED
+    if(!WiFi.setPins(CROWPANEL_C6_SDIO_CLK_PIN,
+                    CROWPANEL_C6_SDIO_CMD_PIN,
+                    CROWPANEL_C6_SDIO_D0_PIN,
+                    CROWPANEL_C6_SDIO_D1_PIN,
+                    CROWPANEL_C6_SDIO_D2_PIN,
+                    CROWPANEL_C6_SDIO_D3_PIN,
+                    CROWPANEL_C6_RESET_PIN)) {
+        devlog_printf("[WIFI] ESP-Hosted SDIO pin override failed");
+    } else {
+        devlog_printf("[WIFI] ESP-Hosted pins set for CrowPanel 10.1 (rst=%d)",
+                      CROWPANEL_C6_RESET_PIN);
+    }
+#endif
+
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(false);
